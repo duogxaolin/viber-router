@@ -8,6 +8,7 @@ pub struct Config {
     pub redis_url: String,
     pub redis_max_connections: usize,
     pub rust_log: String,
+    pub admin_token: String,
 }
 
 impl Config {
@@ -33,6 +34,8 @@ impl Config {
             .parse::<usize>()
             .context("REDIS_MAX_CONNECTIONS must be a valid usize")?;
         let rust_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into());
+        let admin_token = std::env::var("ADMIN_TOKEN")
+            .context("ADMIN_TOKEN is required")?;
 
         Ok(Self {
             host,
@@ -42,6 +45,7 @@ impl Config {
             redis_url,
             redis_max_connections,
             rust_log,
+            admin_token,
         })
     }
 }
