@@ -22,7 +22,7 @@ impl Config {
 
         let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
         let port = std::env::var("PORT")
-            .unwrap_or_else(|_| "3000".into())
+            .unwrap_or_else(|_| "3333".into())
             .parse::<u16>()
             .context("PORT must be a valid u16")?;
         let database_max_connections = std::env::var("DATABASE_MAX_CONNECTIONS")
