@@ -103,9 +103,20 @@ async fn proxy_handler(
     OriginalUri(original_uri): OriginalUri,
     req: Request,
 ) -> Response {
-    // Extract and parse API key from x-api-key header
-    let raw_key = match req.headers().get("x-api-key").and_then(|v| v.to_str().ok()) {
-        Some(key) => key.to_string(),
+    // Extract API key from x-api-key header, falling back to Authorization: Bearer <key>
+    let raw_key = match req
+        .headers()
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            req.headers()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|h| h.strip_prefix("Bearer "))
+                .map(|s| s.to_string())
+        }) {
+        Some(key) => key,
         None => {
             return anthropic_error(
                 StatusCode::UNAUTHORIZED,
