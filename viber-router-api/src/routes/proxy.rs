@@ -168,11 +168,25 @@ async fn proxy_handler(
     let request_method = method.to_string();
     let loop_start = std::time::Instant::now();
 
+    // Build headers map (excluding host, content-length, x-api-key) for logging
+    let log_headers: serde_json::Map<String, Value> = headers
+        .iter()
+        .filter(|(name, _)| {
+            *name != "host" && *name != "content-length" && *name != "x-api-key"
+        })
+        .filter_map(|(name, value)| {
+            value.to_str().ok().map(|v| (name.to_string(), Value::String(v.to_string())))
+        })
+        .collect();
+
     // Failover chain tracking
     let mut failover_chain: Vec<FailoverAttempt> = Vec::new();
     let mut last_server_id = uuid::Uuid::nil();
     let mut last_server_name = String::new();
     let mut last_status: u16 = 0;
+    let mut last_upstream_url = String::new();
+    let mut last_log_headers = serde_json::Map::new();
+    let mut last_transformed_body: Vec<u8> = Vec::new();
 
     // Failover waterfall with key resolution
     for server in &config.servers {
@@ -199,6 +213,10 @@ async fn proxy_handler(
         // Build upstream request
         let mut upstream_req = client.request(method.clone(), &upstream_url);
 
+        // Build per-server log headers (with resolved key)
+        let mut server_log_headers = log_headers.clone();
+        server_log_headers.insert("x-api-key".to_string(), Value::String(resolved_key.clone()));
+
         // Forward headers, replacing x-api-key with resolved key
         for (name, value) in headers.iter() {
             if name == "x-api-key" {
@@ -214,6 +232,7 @@ async fn proxy_handler(
             }
         }
         upstream_req = upstream_req.header("x-api-key", &resolved_key);
+        last_transformed_body = transformed_body.clone();
         upstream_req = upstream_req.body(transformed_body);
 
         let server_start = std::time::Instant::now();
@@ -230,6 +249,8 @@ async fn proxy_handler(
                 last_server_id = server.server_id;
                 last_server_name = server.server_name.clone();
                 last_status = 0;
+                last_upstream_url = upstream_url.clone();
+                last_log_headers = server_log_headers.clone();
                 continue;
             }
         };
@@ -246,6 +267,8 @@ async fn proxy_handler(
         last_server_id = server.server_id;
         last_server_name = server.server_name.clone();
         last_status = status;
+        last_upstream_url = upstream_url.clone();
+        last_log_headers = server_log_headers.clone();
 
         // Check if this is a failover status code
         if config.failover_status_codes.contains(&status) {
@@ -261,6 +284,9 @@ async fn proxy_handler(
                 status as i16, "upstream_error",
                 loop_start.elapsed().as_millis() as i32,
                 &failover_chain, &request_model,
+                serde_json::from_slice(&last_transformed_body).ok(),
+                Some(Value::Object(last_log_headers.clone())),
+                Some(last_upstream_url.clone()),
             );
         } else if failover_chain.len() > 1 {
             // Success after failover — log the chain
@@ -271,6 +297,9 @@ async fn proxy_handler(
                 status as i16, "failover_success",
                 loop_start.elapsed().as_millis() as i32,
                 &failover_chain, &request_model,
+                serde_json::from_slice(&last_transformed_body).ok(),
+                Some(Value::Object(last_log_headers.clone())),
+                Some(last_upstream_url.clone()),
             );
         }
 
@@ -302,6 +331,9 @@ async fn proxy_handler(
         final_status, error_type,
         loop_start.elapsed().as_millis() as i32,
         &failover_chain, &request_model,
+        serde_json::from_slice(&last_transformed_body).ok(),
+        Some(Value::Object(last_log_headers.clone())),
+        Some(last_upstream_url.clone()),
     );
 
     let mut resp = anthropic_error(
@@ -330,6 +362,9 @@ fn emit_log_entry(
     latency_ms: i32,
     failover_chain: &[FailoverAttempt],
     request_model: &Option<String>,
+    request_body: Option<serde_json::Value>,
+    request_headers: Option<serde_json::Value>,
+    upstream_url: Option<String>,
 ) {
     let entry = ProxyLogEntry {
         group_id: config.group_id,
@@ -343,6 +378,9 @@ fn emit_log_entry(
         latency_ms,
         failover_chain: failover_chain.to_vec(),
         request_model: request_model.clone(),
+        request_body,
+        request_headers,
+        upstream_url,
         created_at: Utc::now(),
     };
 

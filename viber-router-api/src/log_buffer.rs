@@ -25,6 +25,9 @@ pub struct ProxyLogEntry {
     pub latency_ms: i32,
     pub failover_chain: Vec<FailoverAttempt>,
     pub request_model: Option<String>,
+    pub request_body: Option<serde_json::Value>,
+    pub request_headers: Option<serde_json::Value>,
+    pub upstream_url: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -81,6 +84,9 @@ async fn flush_batch(pool: &PgPool, entries: &[ProxyLogEntry]) {
     let mut latency_mss: Vec<i32> = Vec::with_capacity(len);
     let mut failover_chains = Vec::with_capacity(len);
     let mut request_models: Vec<Option<String>> = Vec::with_capacity(len);
+    let mut request_bodies: Vec<Option<serde_json::Value>> = Vec::with_capacity(len);
+    let mut request_headers_list: Vec<Option<serde_json::Value>> = Vec::with_capacity(len);
+    let mut upstream_urls: Vec<Option<String>> = Vec::with_capacity(len);
 
     for e in entries {
         ids.push(Uuid::new_v4());
@@ -98,18 +104,21 @@ async fn flush_batch(pool: &PgPool, entries: &[ProxyLogEntry]) {
             serde_json::to_value(&e.failover_chain).unwrap_or_default(),
         );
         request_models.push(e.request_model.clone());
+        request_bodies.push(e.request_body.clone());
+        request_headers_list.push(e.request_headers.clone());
+        upstream_urls.push(e.upstream_url.clone());
     }
 
     let result = sqlx::query(
         "INSERT INTO proxy_logs \
          (id, created_at, group_id, group_api_key, server_id, server_name, \
           request_path, request_method, status_code, error_type, latency_ms, \
-          failover_chain, request_model) \
+          failover_chain, request_model, request_body, request_headers, upstream_url) \
          SELECT * FROM UNNEST(\
            $1::uuid[], $2::timestamptz[], $3::uuid[], $4::text[], \
            $5::uuid[], $6::text[], $7::text[], $8::text[], \
            $9::smallint[], $10::text[], $11::integer[], \
-           $12::jsonb[], $13::text[])",
+           $12::jsonb[], $13::text[], $14::jsonb[], $15::jsonb[], $16::text[])",
     )
     .bind(&ids)
     .bind(&created_ats)
@@ -124,6 +133,9 @@ async fn flush_batch(pool: &PgPool, entries: &[ProxyLogEntry]) {
     .bind(&latency_mss)
     .bind(&failover_chains)
     .bind(&request_models)
+    .bind(&request_bodies)
+    .bind(&request_headers_list)
+    .bind(&upstream_urls)
     .execute(pool)
     .await;
 
@@ -155,6 +167,9 @@ mod tests {
                 latency_ms: 100,
             }],
             request_model: Some("claude-opus-4-6".to_string()),
+            request_body: None,
+            request_headers: None,
+            upstream_url: None,
             created_at: Utc::now(),
         }
     }

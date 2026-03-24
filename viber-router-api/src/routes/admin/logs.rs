@@ -33,6 +33,9 @@ pub struct ProxyLogRow {
     pub latency_ms: i32,
     pub failover_chain: serde_json::Value,
     pub request_model: Option<String>,
+    pub request_body: Option<serde_json::Value>,
+    pub request_headers: Option<serde_json::Value>,
+    pub upstream_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,7 +72,8 @@ async fn list_logs(
     let mut sql = String::from(
         "SELECT id, created_at, group_id, group_api_key, server_id, server_name, \
          request_path, request_method, status_code, error_type, latency_ms, \
-         failover_chain, request_model FROM proxy_logs WHERE 1=1",
+         failover_chain, request_model, request_body, request_headers, upstream_url \
+         FROM proxy_logs WHERE 1=1",
     );
     let mut param_idx = 0u32;
     // We'll use a QueryBuilder approach with raw SQL + positional params

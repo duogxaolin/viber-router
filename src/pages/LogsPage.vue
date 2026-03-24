@@ -134,16 +134,36 @@
                   <div><span class="text-weight-medium">API Key:</span> <code>{{ props.row.group_api_key }}</code></div>
                   <div><span class="text-weight-medium">Model:</span> {{ props.row.request_model || 'N/A' }}</div>
                   <div><span class="text-weight-medium">Error Type:</span> {{ props.row.error_type }}</div>
+                  <q-btn
+                    v-if="props.row.upstream_url"
+                    flat dense no-caps
+                    icon="download"
+                    label="Download cURL"
+                    color="primary"
+                    class="q-mt-sm"
+                    @click.stop="downloadCurl(props.row)"
+                  />
                 </div>
                 <div class="col-12 col-md-6">
                   <div class="text-subtitle2 q-mb-sm">Failover Chain</div>
-                  <div v-for="(attempt, i) in props.row.failover_chain" :key="i" class="q-mb-xs">
-                    <q-badge :color="attempt.status === 0 ? 'grey' : attempt.status < 400 ? 'positive' : 'negative'" class="q-mr-sm">
-                      {{ attempt.status === 0 ? 'ERR' : attempt.status }}
-                    </q-badge>
-                    {{ attempt.server_name }}
-                    <span class="text-grey q-ml-sm">{{ attempt.latency_ms }}ms</span>
-                    <q-icon v-if="Number(i) < props.row.failover_chain.length - 1" name="arrow_forward" class="q-mx-xs" />
+                  <div v-if="props.row.failover_chain.length === 0" class="text-grey">No failover data</div>
+                  <div v-else class="failover-timeline">
+                    <div v-for="(attempt, i) in props.row.failover_chain" :key="i" class="failover-step">
+                      <div class="failover-dot" :class="attemptClass(attempt)" />
+                      <div class="failover-line" v-if="Number(i) < props.row.failover_chain.length - 1" />
+                      <div class="failover-info">
+                        <div class="text-weight-medium">
+                          {{ attempt.server_name }}
+                          <q-badge
+                            :color="attempt.status === 0 ? 'grey' : attempt.status >= 200 && attempt.status < 400 ? 'positive' : 'negative'"
+                            :label="attempt.status === 0 ? 'ERR' : String(attempt.status)"
+                            class="q-ml-sm"
+                          />
+                          <q-icon v-if="attempt.status >= 200 && attempt.status < 400" name="check_circle" color="positive" size="xs" class="q-ml-xs" />
+                        </div>
+                        <div class="text-caption text-grey">{{ attempt.latency_ms }}ms</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -190,6 +210,9 @@ interface ProxyLog {
   latency_ms: number;
   failover_chain: FailoverAttempt[];
   request_model: string | null;
+  request_body: Record<string, unknown> | null;
+  request_headers: Record<string, string> | null;
+  upstream_url: string | null;
 }
 
 interface LogListResponse {
@@ -261,6 +284,12 @@ function errorTypeBadge(type: string): { color: string; label: string } {
   }
 }
 
+function attemptClass(attempt: FailoverAttempt): string {
+  if (attempt.status === 0) return 'bg-grey';
+  if (attempt.status >= 200 && attempt.status < 400) return 'bg-positive';
+  return 'bg-negative';
+}
+
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString();
 }
@@ -315,6 +344,43 @@ function loadMore() {
   }
 }
 
+function shellEscape(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+function generateCurl(log: ProxyLog): string {
+  const parts: string[] = ['curl'];
+
+  if (log.request_method !== 'GET') {
+    parts.push(`-X ${log.request_method}`);
+  }
+
+  parts.push(shellEscape(log.upstream_url ?? ''));
+
+  if (log.request_headers) {
+    for (const [name, value] of Object.entries(log.request_headers)) {
+      parts.push(`-H ${shellEscape(`${name}: ${value}`)}`);
+    }
+  }
+
+  if (log.request_body) {
+    parts.push(`-d ${shellEscape(JSON.stringify(log.request_body))}`);
+  }
+
+  return parts.join(' \\\n  ');
+}
+
+function downloadCurl(log: ProxyLog) {
+  const curl = generateCurl(log);
+  const blob = new Blob([`#!/bin/bash\n${curl}\n`], { type: 'text/x-shellscript' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `curl-${log.id.slice(0, 8)}.sh`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 async function loadFilterOptions() {
   try {
     const [groups, servers] = await Promise.all([
@@ -339,3 +405,37 @@ onMounted(() => {
   loadFilterOptions();
 });
 </script>
+
+<style scoped>
+.failover-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.failover-step {
+  display: flex;
+  align-items: flex-start;
+  position: relative;
+  padding-bottom: 8px;
+}
+.failover-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  margin-right: 10px;
+  flex-shrink: 0;
+}
+.failover-line {
+  position: absolute;
+  left: 4px;
+  top: 15px;
+  bottom: 0;
+  width: 2px;
+  background: #ccc;
+}
+.server-chain {
+  display: inline-flex;
+  align-items: center;
+}
+</style>

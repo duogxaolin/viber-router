@@ -78,6 +78,7 @@
               </q-item-section>
               <q-item-section side>
                 <div class="row q-gutter-xs">
+                  <q-btn flat dense icon="edit" @click="openEditServer(s)" />
                   <q-btn flat dense icon="tune" @click="editMappings(s)" />
                   <q-btn flat dense icon="delete" color="negative" @click="onRemoveServer(s)" />
                 </div>
@@ -90,16 +91,29 @@
         </q-card-section>
       </q-card>
 
-      <q-dialog v-model="showAddServer">
+      <q-dialog v-model="showAddServer" @hide="resetAddForm">
         <q-card style="width: 400px">
           <q-card-section><div class="text-h6">Add Server</div></q-card-section>
           <q-card-section>
-            <q-select v-model="addForm.server_id" :options="availableServers" label="Server" outlined emit-value map-options class="q-mb-sm" />
+            <q-select
+              v-model="addForm.server_id"
+              :options="addServerOptions"
+              label="Server"
+              outlined
+              emit-value
+              map-options
+              class="q-mb-sm"
+            />
+            <template v-if="isCreatingNew">
+              <q-input v-model="newServerForm.name" label="Name" outlined class="q-mb-sm" />
+              <q-input v-model="newServerForm.base_url" label="Base URL" outlined class="q-mb-sm" />
+              <q-input v-model="newServerForm.api_key" label="API Key (optional)" outlined class="q-mb-sm" />
+            </template>
             <q-input v-model.number="addForm.priority" label="Priority" type="number" outlined />
           </q-card-section>
           <q-card-actions align="right">
             <q-btn flat label="Cancel" v-close-popup />
-            <q-btn color="primary" label="Add" @click="onAddServer" />
+            <q-btn color="primary" label="Add" :loading="addingServer" @click="onAddServer" />
           </q-card-actions>
         </q-card>
       </q-dialog>
@@ -118,6 +132,21 @@
           <q-card-actions align="right">
             <q-btn flat label="Cancel" v-close-popup />
             <q-btn color="primary" label="Save" @click="saveMappings" />
+          </q-card-actions>
+        </q-card>
+      </q-dialog>
+
+      <q-dialog v-model="showEditServer">
+        <q-card style="width: 400px">
+          <q-card-section><div class="text-h6">Edit Server</div></q-card-section>
+          <q-card-section>
+            <q-input v-model="editServerForm.name" label="Name" outlined class="q-mb-sm" />
+            <q-input v-model="editServerForm.base_url" label="Base URL" outlined class="q-mb-sm" />
+            <q-input v-model="editServerForm.api_key" label="API Key (optional)" outlined />
+          </q-card-section>
+          <q-card-actions align="right">
+            <q-btn flat label="Cancel" v-close-popup />
+            <q-btn color="primary" label="Save" :loading="savingServer" @click="onSaveEditServer" />
           </q-card-actions>
         </q-card>
       </q-dialog>
@@ -144,11 +173,24 @@ const group = ref<GroupWithServers | null>(null);
 const servers = ref<GroupServerDetail[]>([]);
 const failoverCodesStr = ref('');
 
+const CREATE_NEW = '__create_new__';
 const showAddServer = ref(false);
 const addForm = ref({ server_id: '', priority: 1 });
+const newServerForm = ref({ name: '', base_url: '', api_key: '' });
+const addingServer = ref(false);
+const isCreatingNew = computed(() => addForm.value.server_id === CREATE_NEW);
+const addServerOptions = computed(() => [
+  ...availableServers.value,
+  { label: '＋ Create new server...', value: CREATE_NEW },
+]);
 const showMappings = ref(false);
 const editingMapping = ref<GroupServerDetail | null>(null);
 const mappingEntries = ref<{ from: string; to: string }[]>([]);
+
+const showEditServer = ref(false);
+const editServerId = ref('');
+const editServerForm = ref({ name: '', base_url: '', api_key: '' });
+const savingServer = ref(false);
 
 const keyBuilderEntries = ref<{ server_id: string; server_name: string; short_id: number; key: string; defaultKey: string }[]>([]);
 const showAllKeyBuilderServers = ref(false);
@@ -239,11 +281,39 @@ async function onRegenerate() {
     });
 }
 
+function resetAddForm() {
+  addForm.value = { server_id: '', priority: 1 };
+  newServerForm.value = { name: '', base_url: '', api_key: '' };
+}
+
 async function onAddServer() {
   if (!group.value) return;
-  await groupsStore.assignServer(group.value.id, addForm.value);
-  showAddServer.value = false;
-  loadGroup();
+  addingServer.value = true;
+  try {
+    let serverId = addForm.value.server_id;
+    if (isCreatingNew.value) {
+      const input: { name: string; base_url: string; api_key?: string } = {
+        name: newServerForm.value.name,
+        base_url: newServerForm.value.base_url,
+      };
+      if (newServerForm.value.api_key) input.api_key = newServerForm.value.api_key;
+      const created = await serversStore.createServer(input);
+      serverId = created.id;
+      // refresh server list for future use
+      const sData = await serversStore.fetchServers({ limit: 100 });
+      if (sData) {
+        allServers.value = sData.data.map((s) => ({ label: `${s.name} (#${s.short_id})`, value: s.id }));
+      }
+    }
+    await groupsStore.assignServer(group.value.id, { server_id: serverId, priority: addForm.value.priority });
+    showAddServer.value = false;
+    loadGroup();
+  } catch (e: unknown) {
+    const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to add server';
+    $q.notify({ type: 'negative', message: msg });
+  } finally {
+    addingServer.value = false;
+  }
 }
 
 async function onRemoveServer(s: GroupServerDetail) {
@@ -285,5 +355,34 @@ async function saveMappings() {
   await groupsStore.updateAssignment(group.value.id, editingMapping.value.server_id, { model_mappings: mappings });
   showMappings.value = false;
   loadGroup();
+}
+
+function openEditServer(s: GroupServerDetail) {
+  editServerId.value = s.server_id;
+  editServerForm.value = { name: s.server_name, base_url: s.base_url, api_key: s.api_key || '' };
+  showEditServer.value = true;
+}
+
+async function onSaveEditServer() {
+  savingServer.value = true;
+  try {
+    await serversStore.updateServer(editServerId.value, {
+      name: editServerForm.value.name,
+      base_url: editServerForm.value.base_url,
+      api_key: editServerForm.value.api_key || null,
+    });
+    showEditServer.value = false;
+    loadGroup();
+    // refresh server list for add dialog
+    const sData = await serversStore.fetchServers({ limit: 100 });
+    if (sData) {
+      allServers.value = sData.data.map((s) => ({ label: `${s.name} (#${s.short_id})`, value: s.id }));
+    }
+  } catch (e: unknown) {
+    const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to save server';
+    $q.notify({ type: 'negative', message: msg });
+  } finally {
+    savingServer.value = false;
+  }
 }
 </script>

@@ -489,8 +489,13 @@ code, pre, .text-mono {
   }
 
   .q-toggle__thumb {
-    background-color: #FFFFFF !important;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2) !important;
+    border-radius: 50% !important;
+
+    &:after {
+      border-radius: 50% !important;
+      background: #FFFFFF !important;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2) !important;
+    }
   }
 
   .q-toggle__label {
@@ -598,7 +603,17 @@ a.text-primary {
   }
 }
 
-// ─── Scrollbar (subtle) ────────────────────────────────────────────────────
+// ─── Scrollbar (subtle, auto-fade) ────────────────────────────────────────
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+
+  &:hover,
+  &:focus-within {
+    scrollbar-color: var(--vr-border-hover) transparent;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -609,8 +624,18 @@ a.text-primary {
 }
 
 ::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.2s ease;
+}
+
+*:hover > ::-webkit-scrollbar-thumb,
+*:hover::-webkit-scrollbar-thumb {
   background-color: var(--vr-border-hover);
-  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--vr-text-disabled);
 }
 
 // ─── Reduced Motion ────────────────────────────────────────────────────────
