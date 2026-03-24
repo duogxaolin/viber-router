@@ -364,6 +364,8 @@ watch(ttftBlockOffset, () => {
 
 watch(ttftWindowHours, () => {
   ttftBlockOffset.value = 0;
+  loadTtftStats();
+  startTtftRefresh();
 });
 
 async function loadGroup() {
@@ -592,54 +594,42 @@ async function loadTtftStats() {
 const ttftChartData = computed(() => {
   if (!ttftStats.value || ttftStats.value.servers.length === 0) return null;
 
-  const datasets = ttftStats.value.servers.flatMap((server, idx) => {
-    const color = CHART_COLORS[idx % CHART_COLORS.length] as string;
+  const datasets = ttftStats.value.servers
+    .map((server, idx) => {
+      const color = CHART_COLORS[idx % CHART_COLORS.length] as string;
 
-    const normal: { x: number; y: number }[] = [];
-    const timeouts: { x: number; y: number }[] = [];
+      const data: { x: number; y: number }[] = [];
+      const bgColors: string[] = [];
+      const radii: number[] = [];
+      const styles: string[] = [];
 
-    for (const p of server.data_points) {
-      const x = new Date(p.created_at).getTime();
-      if (p.timed_out) {
-        timeouts.push({ x, y: 0 });
-      } else if (p.ttft_ms != null) {
-        normal.push({ x, y: p.ttft_ms });
+      for (const p of server.data_points) {
+        const x = new Date(p.created_at).getTime();
+        if (p.timed_out) {
+          data.push({ x, y: 0 });
+          bgColors.push('#EF5350');
+          radii.push(6);
+          styles.push('crossRot');
+        } else if (p.ttft_ms != null) {
+          data.push({ x, y: p.ttft_ms });
+          bgColors.push(color);
+          radii.push(4);
+          styles.push('circle');
+        }
       }
-    }
 
-    const result: {
-      label: string;
-      data: { x: number; y: number }[];
-      backgroundColor: string;
-      borderColor: string;
-      pointRadius: number;
-      pointStyle?: string;
-      showLine?: boolean;
-    }[] = [
-      {
+      return {
         label: server.server_name,
-        data: normal,
-        backgroundColor: color,
-        borderColor: color,
-        pointRadius: 4,
-      },
-    ];
-
-    if (timeouts.length > 0) {
-      result.push({
-        label: `${server.server_name} (timeout)`,
-        data: timeouts,
-        backgroundColor: '#EF5350',
+        data,
+        backgroundColor: bgColors,
         borderColor: 'transparent',
-        pointRadius: 6,
-        pointStyle: 'crossRot',
-      });
-    }
+        pointRadius: radii,
+        pointStyle: styles,
+      };
+    })
+    .filter((d) => d.data.length > 0);
 
-    return result;
-  });
-
-  if (datasets.every((d) => d.data.length === 0)) return null;
+  if (datasets.length === 0) return null;
 
   return { datasets };
 });
@@ -665,7 +655,7 @@ const ttftChartOptions = computed(() => ({
       callbacks: {
         label: function (this: unknown, ctx: TooltipItem<'scatter'>) {
           const label = ctx.dataset?.label || '';
-          if (label.includes('timeout')) return `${label}`;
+          if (ctx.parsed?.y === 0) return `${label} (timeout)`;
           return `${label}: ${ctx.parsed?.y}ms`;
         },
       },
