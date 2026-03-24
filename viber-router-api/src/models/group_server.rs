@@ -55,6 +55,7 @@ pub struct CountTokensServer {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupConfig {
     pub group_id: Uuid,
+    pub group_name: String,
     pub api_key: String,
     pub is_active: bool,
     pub failover_status_codes: Vec<u16>,

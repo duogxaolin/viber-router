@@ -29,6 +29,10 @@
           <q-item-section avatar><q-icon name="list_alt" /></q-item-section>
           <q-item-section>Logs</q-item-section>
         </q-item>
+        <q-item clickable :to="'/settings'" :active="$route.path === '/settings'">
+          <q-item-section avatar><q-icon name="settings" /></q-item-section>
+          <q-item-section>Settings</q-item-section>
+        </q-item>
       </q-list>
     </q-drawer>
 

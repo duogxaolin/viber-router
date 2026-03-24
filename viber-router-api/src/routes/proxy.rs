@@ -15,6 +15,7 @@ use crate::models::{CountTokensServer, GroupConfig, GroupServerDetail};
 use crate::routes::AppState;
 use crate::routes::key_parser::parse_api_key;
 use crate::ttft_buffer::TtftLogEntry;
+use crate::telegram_notifier;
 
 pub fn router() -> Router<AppState> {
     Router::new().fallback(proxy_handler)
@@ -83,6 +84,7 @@ async fn resolve_group_config(state: &AppState, api_key: &str) -> Option<GroupCo
 
     let config = GroupConfig {
         group_id: group.id,
+        group_name: group.name.clone(),
         api_key: group.api_key.clone(),
         is_active: group.is_active,
         failover_status_codes: failover_codes,
@@ -450,6 +452,19 @@ async fn proxy_handler(
                 &failover_chain, &request_model,
                 None, None, None,
             );
+            if request_path == "/v1/messages" {
+                let db = state.db.clone();
+                let redis = state.redis.clone();
+                let http_client = state.http_client.clone();
+                let server_id = last_server_id;
+                let server_name = last_server_name.clone();
+                let group_name = config.group_name.clone();
+                let latency = loop_start.elapsed().as_millis() as i32;
+                tokio::spawn(telegram_notifier::maybe_alert(telegram_notifier::AlertContext {
+                    db, redis, http_client, server_id, server_name, group_name,
+                    status_code: status, latency_ms: latency,
+                }));
+            }
             return build_response(upstream_resp).await;
         }
 
@@ -627,6 +642,20 @@ async fn proxy_handler(
         &failover_chain, &request_model,
         None, None, None,
     );
+
+    if request_path == "/v1/messages" && final_status != 0 {
+        let db = state.db.clone();
+        let redis = state.redis.clone();
+        let http_client = state.http_client.clone();
+        let server_id = last_server_id;
+        let server_name = last_server_name.clone();
+        let group_name = config.group_name.clone();
+        let latency = loop_start.elapsed().as_millis() as i32;
+        tokio::spawn(telegram_notifier::maybe_alert(telegram_notifier::AlertContext {
+            db, redis, http_client, server_id, server_name, group_name,
+            status_code: final_status as u16, latency_ms: latency,
+        }));
+    }
 
     let mut resp = anthropic_error(
         StatusCode::TOO_MANY_REQUESTS,

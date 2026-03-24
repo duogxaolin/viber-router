@@ -7,6 +7,7 @@ mod models;
 mod partition;
 mod redis;
 mod routes;
+mod telegram_notifier;
 mod ttft_buffer;
 
 use std::time::Duration;
