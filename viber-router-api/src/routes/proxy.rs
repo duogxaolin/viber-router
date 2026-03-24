@@ -223,10 +223,11 @@ async fn proxy_handler(
         // Build per-server log headers (with resolved key)
         let mut server_log_headers = log_headers.clone();
         server_log_headers.insert("x-api-key".to_string(), Value::String(resolved_key.clone()));
+        server_log_headers.insert("authorization".to_string(), Value::String(format!("Bearer {}", resolved_key)));
 
-        // Forward headers, replacing x-api-key with resolved key
+        // Forward headers, replacing x-api-key and authorization with resolved key
         for (name, value) in headers.iter() {
-            if name == "x-api-key" {
+            if name == "x-api-key" || name == "authorization" {
                 continue;
             }
             if name == "host" || name == "content-length" {
@@ -239,6 +240,7 @@ async fn proxy_handler(
             }
         }
         upstream_req = upstream_req.header("x-api-key", &resolved_key);
+        upstream_req = upstream_req.header("authorization", format!("Bearer {}", resolved_key));
 
         // Prepare curl data for this attempt
         let attempt_body: Option<serde_json::Value> = serde_json::from_slice(&transformed_body).ok();
