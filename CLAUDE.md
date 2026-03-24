@@ -57,3 +57,14 @@ just check
 - Biome handles both linting and formatting (no ESLint/Prettier)
 - Rust code must pass `clippy` with `-D warnings` (warnings are errors)
 - Backend env vars: `DATABASE_URL`, `REDIS_URL` (required); `HOST`, `PORT`, `RUST_LOG` (optional with defaults)
+
+## Post-Edit Workflow
+
+After **every** code change, always run the full check and fix any errors before considering the task done:
+
+```bash
+just check   # type-check + lint for both frontend and backend
+```
+
+- Fix all lint errors and type errors reported by `just check` before finishing.
+- Do not skip this step even for small or seemingly safe edits.
