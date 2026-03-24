@@ -1,5 +1,5 @@
 <template>
-  <q-page class="flex flex-center">
+  <div class="flex flex-center" style="min-height: 100vh">
     <q-card style="width: 400px">
       <q-card-section>
         <div class="text-h5 text-center">Viber Router Admin</div>
@@ -18,7 +18,7 @@
         <q-btn label="Login" color="primary" :loading="loading" @click="login" />
       </q-card-actions>
     </q-card>
-  </q-page>
+  </div>
 </template>
 
 <script setup lang="ts">
