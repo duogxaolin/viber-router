@@ -135,13 +135,13 @@
                   <div><span class="text-weight-medium">Model:</span> {{ props.row.request_model || 'N/A' }}</div>
                   <div><span class="text-weight-medium">Error Type:</span> {{ props.row.error_type }}</div>
                   <q-btn
-                    v-if="props.row.upstream_url"
+                    v-if="props.row.failover_chain.length === 1 && props.row.failover_chain[0].upstream_url"
                     flat dense no-caps
                     icon="download"
                     label="Download cURL"
                     color="primary"
                     class="q-mt-sm"
-                    @click.stop="downloadCurl(props.row)"
+                    @click.stop="downloadCurl(props.row.failover_chain[0], props.row)"
                   />
                 </div>
                 <div class="col-12 col-md-6">
@@ -160,6 +160,15 @@
                             class="q-ml-sm"
                           />
                           <q-icon v-if="attempt.status >= 200 && attempt.status < 400" name="check_circle" color="positive" size="xs" class="q-ml-xs" />
+                          <q-btn
+                            v-if="attempt.upstream_url && !(attempt.status >= 200 && attempt.status < 400)"
+                            flat dense no-caps size="sm"
+                            icon="download"
+                            label="cURL"
+                            color="primary"
+                            class="q-ml-sm"
+                            @click.stop="downloadCurl(attempt, props.row)"
+                          />
                         </div>
                         <div class="text-caption text-grey">{{ attempt.latency_ms }}ms</div>
                       </div>
@@ -194,6 +203,9 @@ interface FailoverAttempt {
   server_name: string;
   status: number;
   latency_ms: number;
+  upstream_url?: string;
+  request_headers?: Record<string, string>;
+  request_body?: Record<string, unknown>;
 }
 
 interface ProxyLog {
@@ -348,35 +360,35 @@ function shellEscape(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
-function generateCurl(log: ProxyLog): string {
+function generateCurl(attempt: FailoverAttempt, method: string): string {
   const parts: string[] = ['curl'];
 
-  if (log.request_method !== 'GET') {
-    parts.push(`-X ${log.request_method}`);
+  if (method !== 'GET') {
+    parts.push(`-X ${method}`);
   }
 
-  parts.push(shellEscape(log.upstream_url ?? ''));
+  parts.push(shellEscape(attempt.upstream_url ?? ''));
 
-  if (log.request_headers) {
-    for (const [name, value] of Object.entries(log.request_headers)) {
+  if (attempt.request_headers) {
+    for (const [name, value] of Object.entries(attempt.request_headers)) {
       parts.push(`-H ${shellEscape(`${name}: ${value}`)}`);
     }
   }
 
-  if (log.request_body) {
-    parts.push(`-d ${shellEscape(JSON.stringify(log.request_body))}`);
+  if (attempt.request_body) {
+    parts.push(`-d ${shellEscape(JSON.stringify(attempt.request_body))}`);
   }
 
   return parts.join(' \\\n  ');
 }
 
-function downloadCurl(log: ProxyLog) {
-  const curl = generateCurl(log);
-  const blob = new Blob([`#!/bin/bash\n${curl}\n`], { type: 'text/x-shellscript' });
+function downloadCurl(attempt: FailoverAttempt, log: ProxyLog) {
+  const curl = generateCurl(attempt, log.request_method);
+  const blob = new Blob([`${curl}\n`], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `curl-${log.id.slice(0, 8)}.sh`;
+  a.download = `curl-${attempt.server_name}-${log.id.slice(0, 8)}.txt`;
   a.click();
   URL.revokeObjectURL(url);
 }

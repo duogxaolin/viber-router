@@ -10,6 +10,12 @@ pub struct FailoverAttempt {
     pub server_name: String,
     pub status: u16,
     pub latency_ms: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_headers: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_body: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +171,9 @@ mod tests {
                 server_name: "srv-1".to_string(),
                 status: 429,
                 latency_ms: 100,
+                upstream_url: None,
+                request_headers: None,
+                request_body: None,
             }],
             request_model: Some("claude-opus-4-6".to_string()),
             request_body: None,
@@ -208,6 +217,9 @@ mod tests {
             server_name: "srv-1".to_string(),
             status: 429,
             latency_ms: 120,
+            upstream_url: None,
+            request_headers: None,
+            request_body: None,
         };
         let json = serde_json::to_value(&attempt).unwrap();
         assert_eq!(json["status"], 429);

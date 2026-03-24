@@ -184,9 +184,6 @@ async fn proxy_handler(
     let mut last_server_id = uuid::Uuid::nil();
     let mut last_server_name = String::new();
     let mut last_status: u16 = 0;
-    let mut last_upstream_url = String::new();
-    let mut last_log_headers = serde_json::Map::new();
-    let mut last_transformed_body: Vec<u8> = Vec::new();
 
     // Failover waterfall with key resolution
     for server in &config.servers {
@@ -232,7 +229,12 @@ async fn proxy_handler(
             }
         }
         upstream_req = upstream_req.header("x-api-key", &resolved_key);
-        last_transformed_body = transformed_body.clone();
+
+        // Prepare curl data for this attempt
+        let attempt_body: Option<serde_json::Value> = serde_json::from_slice(&transformed_body).ok();
+        let attempt_headers = Value::Object(server_log_headers);
+        let attempt_url = upstream_url.clone();
+
         upstream_req = upstream_req.body(transformed_body);
 
         let server_start = std::time::Instant::now();
@@ -245,12 +247,13 @@ async fn proxy_handler(
                     server_name: server.server_name.clone(),
                     status: 0,
                     latency_ms: server_start.elapsed().as_millis() as i32,
+                    upstream_url: Some(attempt_url),
+                    request_headers: Some(attempt_headers),
+                    request_body: attempt_body,
                 });
                 last_server_id = server.server_id;
                 last_server_name = server.server_name.clone();
                 last_status = 0;
-                last_upstream_url = upstream_url.clone();
-                last_log_headers = server_log_headers.clone();
                 continue;
             }
         };
@@ -263,12 +266,13 @@ async fn proxy_handler(
             server_name: server.server_name.clone(),
             status,
             latency_ms: server_latency,
+            upstream_url: Some(attempt_url),
+            request_headers: Some(attempt_headers),
+            request_body: attempt_body,
         });
         last_server_id = server.server_id;
         last_server_name = server.server_name.clone();
         last_status = status;
-        last_upstream_url = upstream_url.clone();
-        last_log_headers = server_log_headers.clone();
 
         // Check if this is a failover status code
         if config.failover_status_codes.contains(&status) {
@@ -284,9 +288,7 @@ async fn proxy_handler(
                 status as i16, "upstream_error",
                 loop_start.elapsed().as_millis() as i32,
                 &failover_chain, &request_model,
-                serde_json::from_slice(&last_transformed_body).ok(),
-                Some(Value::Object(last_log_headers.clone())),
-                Some(last_upstream_url.clone()),
+                None, None, None,
             );
         } else if failover_chain.len() > 1 {
             // Success after failover — log the chain
@@ -297,9 +299,7 @@ async fn proxy_handler(
                 status as i16, "failover_success",
                 loop_start.elapsed().as_millis() as i32,
                 &failover_chain, &request_model,
-                serde_json::from_slice(&last_transformed_body).ok(),
-                Some(Value::Object(last_log_headers.clone())),
-                Some(last_upstream_url.clone()),
+                None, None, None,
             );
         }
 
@@ -331,9 +331,7 @@ async fn proxy_handler(
         final_status, error_type,
         loop_start.elapsed().as_millis() as i32,
         &failover_chain, &request_model,
-        serde_json::from_slice(&last_transformed_body).ok(),
-        Some(Value::Object(last_log_headers.clone())),
-        Some(last_upstream_url.clone()),
+        None, None, None,
     );
 
     let mut resp = anthropic_error(
