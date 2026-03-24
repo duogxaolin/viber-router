@@ -140,7 +140,7 @@
             <template v-if="col.name === 'status_code'">
               <span v-if="props.row.failover_chain.length > 1" class="status-chain">
                 <template v-for="(attempt, i) in props.row.failover_chain" :key="i">
-                  <q-badge :color="statusColor(attempt.status)" :label="String(attempt.status)" />
+                  <q-badge :color="statusColor(attempt.status)" :label="attempt.status === 0 ? 'TTFT' : String(attempt.status)" />
                   <q-icon v-if="Number(i) < props.row.failover_chain.length - 1" name="arrow_forward" size="xs" class="q-mx-xs text-grey" />
                 </template>
               </span>
@@ -205,7 +205,7 @@
                           {{ attempt.server_name }}
                           <q-badge
                             :color="attempt.status === 0 ? 'grey' : attempt.status >= 200 && attempt.status < 400 ? 'positive' : 'negative'"
-                            :label="attempt.status === 0 ? 'ERR' : String(attempt.status)"
+                            :label="attempt.status === 0 ? 'TTFT skip' : String(attempt.status)"
                             class="q-ml-sm"
                           />
                           <q-icon v-if="attempt.status >= 200 && attempt.status < 400" name="check_circle" color="positive" size="xs" class="q-ml-xs" />
@@ -361,6 +361,7 @@ const columns = [
 ];
 
 function statusColor(code: number): string {
+  if (code === 0) return 'negative';
   if (code >= 500) return 'negative';
   if (code >= 400) return 'warning';
   return 'positive';

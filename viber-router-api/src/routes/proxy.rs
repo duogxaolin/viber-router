@@ -307,19 +307,6 @@ async fn proxy_handler(
             return build_response(upstream_resp).await;
         }
 
-        // Success (200) — log failover chain if applicable
-        if failover_chain.len() > 1 {
-            emit_log_entry(
-                &state, &config, &parsed.group_key,
-                last_server_id, &last_server_name,
-                &request_path, &request_method,
-                status as i16, "failover_success",
-                loop_start.elapsed().as_millis() as i32,
-                &failover_chain, &request_model,
-                None, None, None,
-            );
-        }
-
         // Check if this is an SSE response
         let is_sse = upstream_resp
             .headers()
@@ -328,7 +315,18 @@ async fn proxy_handler(
             .is_some_and(|ct| ct.contains("text/event-stream"));
 
         if !is_sse {
-            // Non-SSE: no TTFT measurement, use existing path
+            // Non-SSE: log failover chain if applicable, then use existing path
+            if failover_chain.len() > 1 {
+                emit_log_entry(
+                    &state, &config, &parsed.group_key,
+                    last_server_id, &last_server_name,
+                    &request_path, &request_method,
+                    status as i16, "failover_success",
+                    loop_start.elapsed().as_millis() as i32,
+                    &failover_chain, &request_model,
+                    None, None, None,
+                );
+            }
             return build_response(upstream_resp).await;
         }
 
@@ -354,14 +352,40 @@ async fn proxy_handler(
 
         if should_timeout {
             let timeout_ms = config.ttft_timeout_ms.unwrap() as u64;
+            let elapsed_ms = server_start.elapsed().as_millis() as u64;
+
+            if elapsed_ms >= timeout_ms {
+                // Already exceeded TTFT threshold waiting for headers — failover immediately
+                drop(stream);
+                if let Some(last) = failover_chain.last_mut() {
+                    last.status = 0;
+                }
+                emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path);
+                continue;
+            }
+
+            let remaining_ms = timeout_ms - elapsed_ms;
             match tokio::time::timeout(
-                std::time::Duration::from_millis(timeout_ms),
+                std::time::Duration::from_millis(remaining_ms),
                 stream.next(),
             ).await {
                 Ok(Some(Ok(first_chunk))) => {
                     // First chunk received within timeout
                     let ttft_ms = server_start.elapsed().as_millis() as i32;
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, Some(ttft_ms), false, &request_path);
+
+                    // Log failover chain if this wasn't the first server tried
+                    if failover_chain.len() > 1 {
+                        emit_log_entry(
+                            &state, &config, &parsed.group_key,
+                            last_server_id, &last_server_name,
+                            &request_path, &request_method,
+                            status as i16, "failover_success",
+                            loop_start.elapsed().as_millis() as i32,
+                            &failover_chain, &request_model,
+                            None, None, None,
+                        );
+                    }
 
                     let first = futures_util::stream::once(async move { Ok::<_, std::io::Error>(first_chunk) });
                     let rest = stream.map(|chunk| chunk.map_err(std::io::Error::other));
@@ -372,12 +396,18 @@ async fn proxy_handler(
                 }
                 Ok(Some(Err(_))) | Ok(None) => {
                     // Empty stream or stream error — treat as connection error, try next
+                    if let Some(last) = failover_chain.last_mut() {
+                        last.status = 0;
+                    }
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, false, &request_path);
                     continue;
                 }
                 Err(_) => {
                     // Timeout — record timed_out, drop stream, try next server
                     drop(stream);
+                    if let Some(last) = failover_chain.last_mut() {
+                        last.status = 0;
+                    }
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path);
                     continue;
                 }
@@ -388,6 +418,19 @@ async fn proxy_handler(
                 Some(Ok(first_chunk)) => {
                     let ttft_ms = server_start.elapsed().as_millis() as i32;
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, Some(ttft_ms), false, &request_path);
+
+                    // Log failover chain if this wasn't the first server tried
+                    if failover_chain.len() > 1 {
+                        emit_log_entry(
+                            &state, &config, &parsed.group_key,
+                            last_server_id, &last_server_name,
+                            &request_path, &request_method,
+                            status as i16, "failover_success",
+                            loop_start.elapsed().as_millis() as i32,
+                            &failover_chain, &request_model,
+                            None, None, None,
+                        );
+                    }
 
                     let first = futures_util::stream::once(async move { Ok::<_, std::io::Error>(first_chunk) });
                     let rest = stream.map(|chunk| chunk.map_err(std::io::Error::other));
