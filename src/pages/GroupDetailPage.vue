@@ -102,6 +102,13 @@
                     #{{ s.short_id }}
                     <q-btn flat dense size="xs" icon="content_copy" class="q-ml-xs" @click.stop="copyShortId(s.short_id)" />
                   </q-badge>
+                  <q-badge
+                    v-if="getCircuitStatus(s.server_id)?.is_open"
+                    color="negative"
+                    class="q-ml-sm"
+                  >
+                    Circuit Open ({{ formatCircuitRemaining(getCircuitStatus(s.server_id)?.remaining_seconds ?? 0) }})
+                  </q-badge>
                 </q-item-label>
                 <q-item-label caption>{{ s.base_url }}</q-item-label>
               </q-item-section>
@@ -231,7 +238,44 @@
           <q-card-section>
             <q-input v-model="editServerForm.name" label="Name" outlined class="q-mb-sm" />
             <q-input v-model="editServerForm.base_url" label="Base URL" outlined class="q-mb-sm" />
-            <q-input v-model="editServerForm.api_key" label="API Key (optional)" outlined />
+            <q-input v-model="editServerForm.api_key" label="API Key (optional)" outlined class="q-mb-sm" />
+            <div class="text-subtitle2 q-mt-md q-mb-xs">Circuit Breaker</div>
+            <div class="text-caption text-grey q-mb-sm">
+              Tự động tắt server sau khi lỗi vượt ngưỡng, tự bật lại sau thời gian chờ. Để trống tất cả để tắt.
+            </div>
+            <q-input
+              v-model.number="editServerCbForm.cb_max_failures"
+              label="Max Failures"
+              type="number"
+              :min="1"
+              outlined
+              dense
+              clearable
+              class="q-mb-sm"
+              @clear="onCbFieldClear('cb_max_failures')"
+            />
+            <q-input
+              v-model.number="editServerCbForm.cb_window_seconds"
+              label="Failure Window (seconds)"
+              type="number"
+              :min="1"
+              outlined
+              dense
+              clearable
+              class="q-mb-sm"
+              @clear="onCbFieldClear('cb_window_seconds')"
+            />
+            <q-input
+              v-model.number="editServerCbForm.cb_cooldown_seconds"
+              label="Cooldown (seconds)"
+              type="number"
+              :min="1"
+              outlined
+              dense
+              clearable
+              class="q-mb-sm"
+              @clear="onCbFieldClear('cb_cooldown_seconds')"
+            />
           </q-card-section>
           <q-card-actions align="right">
             <q-btn flat label="Cancel" v-close-popup />
@@ -250,7 +294,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useQuasar, copyToClipboard } from 'quasar';
-import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type TtftStatsResponse } from 'stores/groups';
+import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type TtftStatsResponse, type CircuitStatus } from 'stores/groups';
 import { useServersStore } from 'stores/servers';
 import { Scatter } from 'vue-chartjs';
 import {
@@ -298,6 +342,11 @@ const mappingEntries = ref<{ from: string; to: string }[]>([]);
 const showEditServer = ref(false);
 const editServerId = ref('');
 const editServerForm = ref({ name: '', base_url: '', api_key: '' });
+const editServerCbForm = ref({
+  cb_max_failures: null as number | null,
+  cb_window_seconds: null as number | null,
+  cb_cooldown_seconds: null as number | null,
+});
 const savingServer = ref(false);
 
 const keyBuilderEntries = ref<{ server_id: string; server_name: string; short_id: number; key: string; defaultKey: string }[]>([]);
@@ -311,6 +360,8 @@ const ttftBlockOffset = ref(0);
 const ttftWindowHours = ref(4);
 let ttftRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const ctMappingEntries = ref<{ from: string; to: string }[]>([]);
+const circuitStatuses = ref<CircuitStatus[]>([]);
+let circuitPollTimer: ReturnType<typeof setInterval> | null = null;
 const visibleKeyBuilderEntries = computed(() =>
   showAllKeyBuilderServers.value
     ? keyBuilderEntries.value
@@ -338,10 +389,12 @@ onMounted(async () => {
   }
   loadTtftStats();
   startTtftRefresh();
+  loadCircuitStatus();
 });
 
 onUnmounted(() => {
   stopTtftRefresh();
+  stopCircuitPoll();
 });
 
 function startTtftRefresh() {
@@ -385,6 +438,51 @@ async function loadGroup() {
     key: '',
     defaultKey: s.api_key || '',
   }));
+}
+
+async function loadCircuitStatus() {
+  if (!group.value) return;
+  try {
+    circuitStatuses.value = await groupsStore.fetchCircuitStatus(group.value.id);
+  } catch {
+    circuitStatuses.value = [];
+  }
+  // Start/stop polling based on whether any circuit is open
+  if (circuitStatuses.value.some((c) => c.is_open)) {
+    startCircuitPoll();
+  } else {
+    stopCircuitPoll();
+  }
+}
+
+function startCircuitPoll() {
+  if (circuitPollTimer) return;
+  circuitPollTimer = setInterval(loadCircuitStatus, 10_000);
+}
+
+function stopCircuitPoll() {
+  if (circuitPollTimer) {
+    clearInterval(circuitPollTimer);
+    circuitPollTimer = null;
+  }
+}
+
+function getCircuitStatus(serverId: string): CircuitStatus | undefined {
+  return circuitStatuses.value.find((c) => c.server_id === serverId);
+}
+
+function formatCircuitRemaining(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+function onCbFieldClear(field: 'cb_max_failures' | 'cb_window_seconds' | 'cb_cooldown_seconds') {
+  if (editServerCbForm.value[field] === null || editServerCbForm.value[field] === undefined) {
+    editServerCbForm.value.cb_max_failures = null;
+    editServerCbForm.value.cb_window_seconds = null;
+    editServerCbForm.value.cb_cooldown_seconds = null;
+  }
 }
 
 async function saveGroup() {
@@ -539,10 +637,28 @@ async function saveMappings() {
 function openEditServer(s: GroupServerDetail) {
   editServerId.value = s.server_id;
   editServerForm.value = { name: s.server_name, base_url: s.base_url, api_key: s.api_key || '' };
+  editServerCbForm.value = {
+    cb_max_failures: s.cb_max_failures,
+    cb_window_seconds: s.cb_window_seconds,
+    cb_cooldown_seconds: s.cb_cooldown_seconds,
+  };
   showEditServer.value = true;
 }
 
 async function onSaveEditServer() {
+  // Validate CB fields: all-or-nothing
+  const { cb_max_failures, cb_window_seconds, cb_cooldown_seconds } = editServerCbForm.value;
+  const cbValues = [cb_max_failures, cb_window_seconds, cb_cooldown_seconds];
+  const cbNonNull = cbValues.filter((v) => v !== null && v !== undefined);
+  if (cbNonNull.length > 0 && cbNonNull.length < 3) {
+    $q.notify({ type: 'negative', message: 'Circuit breaker requires all three fields or none.' });
+    return;
+  }
+  if (cbNonNull.length === 3 && cbNonNull.some((v) => (v as number) < 1)) {
+    $q.notify({ type: 'negative', message: 'Circuit breaker values must be >= 1.' });
+    return;
+  }
+
   savingServer.value = true;
   try {
     await serversStore.updateServer(editServerId.value, {
@@ -550,8 +666,17 @@ async function onSaveEditServer() {
       base_url: editServerForm.value.base_url,
       api_key: editServerForm.value.api_key || null,
     });
+    // Save circuit breaker fields via assignment update
+    if (group.value) {
+      await groupsStore.updateAssignment(group.value.id, editServerId.value, {
+        cb_max_failures: editServerCbForm.value.cb_max_failures,
+        cb_window_seconds: editServerCbForm.value.cb_window_seconds,
+        cb_cooldown_seconds: editServerCbForm.value.cb_cooldown_seconds,
+      });
+    }
     showEditServer.value = false;
     loadGroup();
+    loadCircuitStatus();
     // refresh server list for add dialog
     const sData = await serversStore.fetchServers({ limit: 100 });
     if (sData) {

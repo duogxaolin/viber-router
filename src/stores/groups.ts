@@ -24,6 +24,9 @@ export interface GroupServerDetail {
   priority: number;
   model_mappings: Record<string, string>;
   is_enabled: boolean;
+  cb_max_failures: number | null;
+  cb_window_seconds: number | null;
+  cb_cooldown_seconds: number | null;
 }
 
 export interface GroupWithServers extends Group {
@@ -35,6 +38,12 @@ interface PaginatedResponse {
   total: number;
   page: number;
   total_pages: number;
+}
+
+export interface CircuitStatus {
+  server_id: string;
+  is_open: boolean;
+  remaining_seconds: number;
 }
 
 export interface TtftDataPoint {
@@ -125,7 +134,18 @@ export const useGroupsStore = defineStore('groups', () => {
     await api.post(`/api/admin/groups/${groupId}/servers`, input);
   }
 
-  async function updateAssignment(groupId: string, serverId: string, input: { priority?: number; model_mappings?: Record<string, string>; is_enabled?: boolean }) {
+  async function updateAssignment(
+    groupId: string,
+    serverId: string,
+    input: {
+      priority?: number;
+      model_mappings?: Record<string, string>;
+      is_enabled?: boolean;
+      cb_max_failures?: number | null;
+      cb_window_seconds?: number | null;
+      cb_cooldown_seconds?: number | null;
+    },
+  ) {
     await api.put(`/api/admin/groups/${groupId}/servers/${serverId}`, input);
   }
 
@@ -149,11 +169,18 @@ export const useGroupsStore = defineStore('groups', () => {
     return data;
   }
 
+  async function fetchCircuitStatus(groupId: string) {
+    const { data } = await api.get<CircuitStatus[]>(
+      `/api/admin/groups/${groupId}/circuit-status`,
+    );
+    return data;
+  }
+
   return {
     groups, total, totalPages, loading,
     fetchGroups, getGroup, createGroup, updateGroup, deleteGroup, regenerateKey,
     bulkActivate, bulkDeactivate, bulkDelete, bulkAssignServer,
     assignServer, updateAssignment, removeServer, reorderServers,
-    fetchTtftStats,
+    fetchTtftStats, fetchCircuitStatus,
   };
 });

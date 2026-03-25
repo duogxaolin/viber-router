@@ -1,4 +1,5 @@
 mod cache;
+mod circuit_breaker;
 mod config;
 mod db;
 mod log_buffer;

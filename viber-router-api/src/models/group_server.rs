@@ -9,6 +9,9 @@ pub struct GroupServer {
     pub priority: i32,
     pub model_mappings: serde_json::Value,
     pub is_enabled: bool,
+    pub cb_max_failures: Option<i32>,
+    pub cb_window_seconds: Option<i32>,
+    pub cb_cooldown_seconds: Option<i32>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -22,6 +25,9 @@ pub struct GroupServerDetail {
     pub priority: i32,
     pub model_mappings: serde_json::Value,
     pub is_enabled: bool,
+    pub cb_max_failures: Option<i32>,
+    pub cb_window_seconds: Option<i32>,
+    pub cb_cooldown_seconds: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +42,9 @@ pub struct UpdateAssignment {
     pub priority: Option<i32>,
     pub model_mappings: Option<serde_json::Value>,
     pub is_enabled: Option<bool>,
+    pub cb_max_failures: Option<Option<i32>>,
+    pub cb_window_seconds: Option<Option<i32>>,
+    pub cb_cooldown_seconds: Option<Option<i32>>,
 }
 
 #[derive(Debug, Deserialize)]

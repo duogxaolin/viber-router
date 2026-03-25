@@ -19,6 +19,45 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
     err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
 }
 
+/// Validate circuit breaker fields: all-or-nothing, each >= 1.
+fn validate_cb_fields(
+    max_failures: Option<Option<i32>>,
+    window_seconds: Option<Option<i32>>,
+    cooldown_seconds: Option<Option<i32>>,
+) -> Result<(), ApiError> {
+    let provided: Vec<&Option<i32>> = [&max_failures, &window_seconds, &cooldown_seconds]
+        .into_iter()
+        .filter_map(|f| f.as_ref())
+        .collect();
+
+    if provided.is_empty() {
+        return Ok(());
+    }
+
+    if provided.len() != 3 {
+        return Err(err(StatusCode::BAD_REQUEST, "Circuit breaker fields must be all set or all null"));
+    }
+
+    let all_null = provided.iter().all(|v| v.is_none());
+    let all_some = provided.iter().all(|v| v.is_some());
+
+    if !all_null && !all_some {
+        return Err(err(StatusCode::BAD_REQUEST, "Circuit breaker fields must be all set or all null"));
+    }
+
+    if all_some {
+        for v in &provided {
+            if let Some(val) = v
+                && *val < 1
+            {
+                return Err(err(StatusCode::BAD_REQUEST, "Circuit breaker values must be >= 1"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(assign_server))
@@ -34,8 +73,8 @@ async fn assign_server(
     let mappings = input.model_mappings.unwrap_or(serde_json::json!({}));
 
     let gs = sqlx::query_as::<_, GroupServer>(
-        "INSERT INTO group_servers (group_id, server_id, priority, model_mappings, is_enabled) \
-         VALUES ($1, $2, $3, $4, true) RETURNING *",
+        "INSERT INTO group_servers (group_id, server_id, priority, model_mappings, is_enabled, cb_max_failures, cb_window_seconds, cb_cooldown_seconds) \
+         VALUES ($1, $2, $3, $4, true, NULL, NULL, NULL) RETURNING *",
     )
     .bind(group_id)
     .bind(input.server_id)
@@ -60,11 +99,31 @@ async fn update_assignment(
     Path((group_id, server_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<UpdateAssignment>,
 ) -> Result<Json<GroupServer>, ApiError> {
+    // Validate circuit breaker fields
+    validate_cb_fields(input.cb_max_failures, input.cb_window_seconds, input.cb_cooldown_seconds)?;
+
+    // Determine whether to update CB fields
+    let (update_cb_max, cb_max_val) = match input.cb_max_failures {
+        Some(v) => (true, v),
+        None => (false, None),
+    };
+    let (update_cb_window, cb_window_val) = match input.cb_window_seconds {
+        Some(v) => (true, v),
+        None => (false, None),
+    };
+    let (update_cb_cooldown, cb_cooldown_val) = match input.cb_cooldown_seconds {
+        Some(v) => (true, v),
+        None => (false, None),
+    };
+
     let gs = sqlx::query_as::<_, GroupServer>(
         "UPDATE group_servers SET \
          priority = COALESCE($1, priority), \
          model_mappings = COALESCE($2, model_mappings), \
-         is_enabled = COALESCE($3, is_enabled) \
+         is_enabled = COALESCE($3, is_enabled), \
+         cb_max_failures = CASE WHEN $6 THEN $7 ELSE cb_max_failures END, \
+         cb_window_seconds = CASE WHEN $8 THEN $9 ELSE cb_window_seconds END, \
+         cb_cooldown_seconds = CASE WHEN $10 THEN $11 ELSE cb_cooldown_seconds END \
          WHERE group_id = $4 AND server_id = $5 RETURNING *",
     )
     .bind(input.priority)
@@ -72,6 +131,12 @@ async fn update_assignment(
     .bind(input.is_enabled)
     .bind(group_id)
     .bind(server_id)
+    .bind(update_cb_max)
+    .bind(cb_max_val)
+    .bind(update_cb_window)
+    .bind(cb_window_val)
+    .bind(update_cb_cooldown)
+    .bind(cb_cooldown_val)
     .fetch_optional(&state.db)
     .await
     .map_err(internal)?

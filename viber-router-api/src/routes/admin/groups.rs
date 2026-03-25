@@ -51,6 +51,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(list_groups).post(create_group))
         .route("/{id}", get(get_group).put(update_group).delete(delete_group))
         .route("/{id}/regenerate-key", post(regenerate_key))
+        .route("/{id}/circuit-status", get(circuit_status))
         .route("/bulk/activate", post(bulk_activate))
         .route("/bulk/deactivate", post(bulk_deactivate))
         .route("/bulk/delete", post(bulk_delete))
@@ -157,7 +158,8 @@ async fn get_group(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Group not found"))?;
 
     let servers = sqlx::query_as::<_, GroupServerDetail>(
-        "SELECT gs.server_id, s.short_id, s.name as server_name, s.base_url, s.api_key, gs.priority, gs.model_mappings, gs.is_enabled \
+        "SELECT gs.server_id, s.short_id, s.name as server_name, s.base_url, s.api_key, gs.priority, gs.model_mappings, gs.is_enabled, \
+         gs.cb_max_failures, gs.cb_window_seconds, gs.cb_cooldown_seconds \
          FROM group_servers gs JOIN servers s ON s.id = gs.server_id \
          WHERE gs.group_id = $1 ORDER BY gs.priority",
     )
@@ -167,6 +169,48 @@ async fn get_group(
     .map_err(internal)?;
 
     Ok(Json(GroupWithServers { group, servers }))
+}
+
+#[derive(Debug, serde::Serialize)]
+struct CircuitStatusEntry {
+    server_id: Uuid,
+    is_open: bool,
+    remaining_seconds: i64,
+}
+
+async fn circuit_status(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<CircuitStatusEntry>>, ApiError> {
+    // Get all servers with CB configured for this group
+    let rows = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT server_id FROM group_servers WHERE group_id = $1 AND cb_max_failures IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+
+    let mut entries = Vec::new();
+    if let Ok(mut conn) = state.redis.get().await {
+        for (server_id,) in rows {
+            let key = format!("cb:open:{id}:{server_id}");
+            let ttl: i64 = deadpool_redis::redis::cmd("TTL")
+                .arg(&key)
+                .query_async(&mut conn)
+                .await
+                .unwrap_or(-2);
+            // TTL: -2 = key doesn't exist, -1 = no expiry, >0 = remaining seconds
+            let is_open = ttl > 0;
+            entries.push(CircuitStatusEntry {
+                server_id,
+                is_open,
+                remaining_seconds: if is_open { ttl } else { 0 },
+            });
+        }
+    }
+
+    Ok(Json(entries))
 }
 
 async fn update_group(

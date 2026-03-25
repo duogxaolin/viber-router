@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use serde_json::Value;
 
 use crate::cache;
+use crate::circuit_breaker;
 use crate::log_buffer::{FailoverAttempt, ProxyLogEntry};
 use crate::models::{CountTokensServer, GroupConfig, GroupServerDetail};
 use crate::routes::AppState;
@@ -19,6 +20,26 @@ use crate::telegram_notifier;
 
 pub fn router() -> Router<AppState> {
     Router::new().fallback(proxy_handler)
+}
+
+fn spawn_cb_alert(state: &AppState, config: &GroupConfig, server: &GroupServerDetail) {
+    let db = state.db.clone();
+    let redis = state.redis.clone();
+    let http_client = state.http_client.clone();
+    let server_name = server.server_name.clone();
+    let group_name = config.group_name.clone();
+    let group_id = config.group_id;
+    let server_id = server.server_id;
+    let max_f = server.cb_max_failures.unwrap();
+    let win = server.cb_window_seconds.unwrap();
+    let cool = server.cb_cooldown_seconds.unwrap();
+    tokio::spawn(telegram_notifier::send_circuit_breaker_alert(
+        telegram_notifier::CircuitBreakerAlertContext {
+            db, redis, http_client, server_name, group_name,
+            group_id, server_id,
+            error_count: max_f, window_seconds: win, cooldown_seconds: cool,
+        },
+    ));
 }
 
 fn anthropic_error(status: StatusCode, error_type: &str, message: &str) -> Response {
@@ -48,7 +69,8 @@ async fn resolve_group_config(state: &AppState, api_key: &str) -> Option<GroupCo
     .ok()??;
 
     let servers = sqlx::query_as::<_, GroupServerDetail>(
-        "SELECT gs.server_id, s.short_id, s.name as server_name, s.base_url, s.api_key, gs.priority, gs.model_mappings, gs.is_enabled \
+        "SELECT gs.server_id, s.short_id, s.name as server_name, s.base_url, s.api_key, gs.priority, gs.model_mappings, gs.is_enabled, \
+         gs.cb_max_failures, gs.cb_window_seconds, gs.cb_cooldown_seconds \
          FROM group_servers gs JOIN servers s ON s.id = gs.server_id \
          WHERE gs.group_id = $1 AND gs.is_enabled = true ORDER BY gs.priority",
     )
@@ -356,6 +378,27 @@ async fn proxy_handler(
             continue; // No key available — skip this server
         };
 
+        let has_cb = server.cb_max_failures.is_some();
+
+        // Circuit breaker: check re-enable first, then check if open
+        if has_cb {
+            if circuit_breaker::check_re_enabled(&state.redis, config.group_id, server.server_id).await {
+                let db = state.db.clone();
+                let http_client = state.http_client.clone();
+                let server_name = server.server_name.clone();
+                let group_name = config.group_name.clone();
+                tokio::spawn(telegram_notifier::send_circuit_re_enable_alert(
+                    telegram_notifier::CircuitReEnableAlertContext {
+                        db, http_client, server_name, group_name,
+                    },
+                ));
+            }
+
+            if circuit_breaker::is_circuit_open(&state.redis, config.group_id, server.server_id).await {
+                continue; // Skip circuit-broken server
+            }
+        }
+
         any_server_attempted = true;
         let transformed_body = transform_model(&body_bytes, &server.model_mappings);
 
@@ -416,6 +459,18 @@ async fn proxy_handler(
                 });
                 last_server_id = server.server_id;
                 last_server_name = server.server_name.clone();
+                // Circuit breaker: record error on connection failure
+                if has_cb {
+                    let tripped = circuit_breaker::record_error(
+                        &state.redis, config.group_id, server.server_id,
+                        server.cb_max_failures.unwrap(),
+                        server.cb_window_seconds.unwrap(),
+                        server.cb_cooldown_seconds.unwrap(),
+                    ).await;
+                    if tripped {
+                        spawn_cb_alert(&state, &config, server);
+                    }
+                }
                 continue;
             }
         };
@@ -438,6 +493,18 @@ async fn proxy_handler(
 
         // Check if this is a failover status code
         if config.failover_status_codes.contains(&status) {
+            // Circuit breaker: record error on failover status code
+            if has_cb {
+                let tripped = circuit_breaker::record_error(
+                    &state.redis, config.group_id, server.server_id,
+                    server.cb_max_failures.unwrap(),
+                    server.cb_window_seconds.unwrap(),
+                    server.cb_cooldown_seconds.unwrap(),
+                ).await;
+                if tripped {
+                    spawn_cb_alert(&state, &config, server);
+                }
+            }
             continue;
         }
 
@@ -522,6 +589,18 @@ async fn proxy_handler(
                     last.status = 0;
                 }
                 emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path);
+                // Circuit breaker: record TTFT timeout as error
+                if has_cb {
+                    let tripped = circuit_breaker::record_error(
+                        &state.redis, config.group_id, server.server_id,
+                        server.cb_max_failures.unwrap(),
+                        server.cb_window_seconds.unwrap(),
+                        server.cb_cooldown_seconds.unwrap(),
+                    ).await;
+                    if tripped {
+                        spawn_cb_alert(&state, &config, server);
+                    }
+                }
                 continue;
             }
 
@@ -561,6 +640,15 @@ async fn proxy_handler(
                         last.status = 0;
                     }
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, false, &request_path);
+                    if has_cb {
+                        let tripped = circuit_breaker::record_error(
+                            &state.redis, config.group_id, server.server_id,
+                            server.cb_max_failures.unwrap(), server.cb_window_seconds.unwrap(), server.cb_cooldown_seconds.unwrap(),
+                        ).await;
+                        if tripped {
+                            spawn_cb_alert(&state, &config, server);
+                        }
+                    }
                     continue;
                 }
                 Err(_) => {
@@ -570,6 +658,15 @@ async fn proxy_handler(
                         last.status = 0;
                     }
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path);
+                    if has_cb {
+                        let tripped = circuit_breaker::record_error(
+                            &state.redis, config.group_id, server.server_id,
+                            server.cb_max_failures.unwrap(), server.cb_window_seconds.unwrap(), server.cb_cooldown_seconds.unwrap(),
+                        ).await;
+                        if tripped {
+                            spawn_cb_alert(&state, &config, server);
+                        }
+                    }
                     continue;
                 }
             }
@@ -603,6 +700,15 @@ async fn proxy_handler(
                 Some(Err(_)) | None => {
                     // Empty stream or error — treat as connection error
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, false, &request_path);
+                    if has_cb {
+                        let tripped = circuit_breaker::record_error(
+                            &state.redis, config.group_id, server.server_id,
+                            server.cb_max_failures.unwrap(), server.cb_window_seconds.unwrap(), server.cb_cooldown_seconds.unwrap(),
+                        ).await;
+                        if tripped {
+                            spawn_cb_alert(&state, &config, server);
+                        }
+                    }
                     continue;
                 }
             }
