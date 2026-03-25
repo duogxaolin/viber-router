@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Streaming (SSE) passthrough
-The system SHALL support streaming responses. When the upstream server returns a streaming SSE response, the system SHALL stream it directly to the client. When TTFT auto-switch is enabled and the current server is not the last in the waterfall, the system SHALL detect SSE responses in the proxy handler (before delegating to build_response) to enable TTFT timeout logic. When a count-tokens default server is configured and the request path is `/v1/messages/count_tokens`, the proxy handler SHALL attempt the default server before entering the failover waterfall, and SHALL skip the default server's `server_id` in the waterfall if the default attempt failed.
+The system SHALL support streaming responses. When the upstream server returns a streaming SSE response, the system SHALL stream it directly to the client. When TTFT auto-switch is enabled and the current server is not the last in the waterfall, the system SHALL detect SSE responses in the proxy handler (before delegating to build_response) to enable TTFT timeout logic. When a count-tokens default server is configured and the request path is `/v1/messages/count_tokens`, the proxy handler SHALL attempt the default server before entering the failover waterfall, and SHALL skip the default server's `server_id` in the waterfall if the default attempt failed. When the request path is `/v1/messages` and the response is HTTP 200, the system SHALL wrap the forwarded stream to extract token usage from `message_start` and `message_delta` SSE events without modifying the stream content.
 
 #### Scenario: Streaming response passthrough
 - **WHEN** the client sends `"stream": true` and the upstream returns an SSE stream with HTTP 200
@@ -34,3 +34,11 @@ The system SHALL support streaming responses. When the upstream server returns a
 #### Scenario: Count-tokens default server — skip in chain after failure
 - **WHEN** the default count-tokens server fails and the failover waterfall contains a server with the same `server_id`
 - **THEN** the system SHALL skip that server in the waterfall to avoid a redundant retry
+
+#### Scenario: Token usage extraction from streaming response
+- **WHEN** the request path is `/v1/messages` and the upstream returns a streaming HTTP 200 response
+- **THEN** the system SHALL wrap the stream to extract `input_tokens` from `message_start` and `output_tokens` from `message_delta` events, forwarding all bytes unchanged to the client
+
+#### Scenario: Token usage extraction from non-streaming response
+- **WHEN** the request path is `/v1/messages` and the upstream returns a non-streaming HTTP 200 response
+- **THEN** the system SHALL parse the response JSON to extract `usage.input_tokens` and `usage.output_tokens` before returning the response to the client

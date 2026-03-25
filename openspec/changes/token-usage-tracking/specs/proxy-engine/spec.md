@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Streaming (SSE) passthrough
-The system SHALL support streaming responses. When the upstream server returns a streaming SSE response, the system SHALL stream it directly to the client. When TTFT auto-switch is enabled and the current server is not the last in the waterfall, the system SHALL detect SSE responses in the proxy handler (before delegating to build_response) to enable TTFT timeout logic. When a count-tokens default server is configured and the request path is `/v1/messages/count_tokens`, the proxy handler SHALL attempt the default server before entering the failover waterfall, and SHALL skip the default server's `server_id` in the waterfall if the default attempt failed. **Before attempting each server, the proxy SHALL check if the server's circuit breaker is open (Redis key `cb:open:{group_id}:{server_id}` exists) and skip it if so. After each error (failover status code, connection error, or TTFT timeout), if the server has circuit breaker configured, the proxy SHALL increment the error counter and trip the breaker if threshold is reached.**
+The system SHALL support streaming responses. When the upstream server returns a streaming SSE response, the system SHALL stream it directly to the client. When TTFT auto-switch is enabled and the current server is not the last in the waterfall, the system SHALL detect SSE responses in the proxy handler (before delegating to build_response) to enable TTFT timeout logic. When a count-tokens default server is configured and the request path is `/v1/messages/count_tokens`, the proxy handler SHALL attempt the default server before entering the failover waterfall, and SHALL skip the default server's `server_id` in the waterfall if the default attempt failed. When the request path is `/v1/messages` and the response is HTTP 200, the system SHALL wrap the forwarded stream to extract token usage from `message_start` and `message_delta` SSE events without modifying the stream content.
 
 #### Scenario: Streaming response passthrough
 - **WHEN** the client sends `"stream": true` and the upstream returns an SSE stream with HTTP 200
@@ -35,14 +35,10 @@ The system SHALL support streaming responses. When the upstream server returns a
 - **WHEN** the default count-tokens server fails and the failover waterfall contains a server with the same `server_id`
 - **THEN** the system SHALL skip that server in the waterfall to avoid a redundant retry
 
-#### Scenario: Server with open circuit breaker — skipped
-- **WHEN** a server in the failover chain has `cb:open:{group_id}:{server_id}` key existing in Redis
-- **THEN** the system SHALL skip this server without sending a request and continue to the next server
+#### Scenario: Token usage extraction from streaming response
+- **WHEN** the request path is `/v1/messages` and the upstream returns a streaming HTTP 200 response
+- **THEN** the system SHALL wrap the stream to extract `input_tokens` from `message_start` and `output_tokens` from `message_delta` events, forwarding all bytes unchanged to the client
 
-#### Scenario: Server error increments circuit breaker counter
-- **WHEN** a server with `cb_max_failures=5` returns a failover status code or connection error
-- **THEN** the system SHALL INCR `cb:err:{group_id}:{server_id}` in Redis and if count >= 5, trip the circuit breaker
-
-#### Scenario: Circuit breaker not configured — no circuit check
-- **WHEN** a server has `cb_max_failures=NULL` and returns an error
-- **THEN** the system SHALL NOT perform any circuit breaker Redis operations for this server
+#### Scenario: Token usage extraction from non-streaming response
+- **WHEN** the request path is `/v1/messages` and the upstream returns a non-streaming HTTP 200 response
+- **THEN** the system SHALL parse the response JSON to extract `usage.input_tokens` and `usage.output_tokens` before returning the response to the client

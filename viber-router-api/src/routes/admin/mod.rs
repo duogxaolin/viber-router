@@ -3,6 +3,7 @@ pub mod groups;
 pub mod group_servers;
 pub mod logs;
 pub mod ttft;
+pub mod token_usage;
 pub mod settings;
 
 use axum::{
@@ -40,6 +41,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .nest("/groups", groups::router())
         .nest("/logs", logs::router())
         .nest("/ttft-stats", ttft::router())
+        .nest("/token-usage", token_usage::router())
         .nest("/settings", settings::router())
         .layer(axum::middleware::from_fn_with_state(
             state,

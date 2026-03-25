@@ -187,6 +187,61 @@
         </q-card-section>
       </q-card>
 
+      <q-card flat bordered>
+        <q-card-section>
+          <div class="row items-center q-mb-sm">
+            <div class="text-subtitle1">Token Usage</div>
+            <q-space />
+            <q-btn-toggle
+              v-model="tokenUsagePeriod"
+              flat dense no-caps
+              toggle-color="primary"
+              :options="[
+                { label: '1h', value: '1h' },
+                { label: '6h', value: '6h' },
+                { label: '24h', value: '24h' },
+                { label: '7d', value: '7d' },
+                { label: '30d', value: '30d' },
+              ]"
+            />
+          </div>
+          <div class="row q-gutter-sm q-mb-sm">
+            <q-select
+              v-model="tokenUsageServerFilter"
+              :options="tokenUsageServerOptions"
+              label="Server"
+              outlined dense
+              emit-value map-options clearable
+              style="min-width: 200px"
+            />
+            <q-toggle v-model="tokenUsageDynamicKeyFilter" label="Dynamic keys only" dense />
+            <q-input v-model="tokenUsageKeyHashFilter" label="Key hash" outlined dense clearable style="max-width: 200px" />
+            <q-btn flat dense icon="refresh" @click="loadTokenUsage" />
+          </div>
+          <div v-if="tokenUsageLoading && !tokenUsageStats" class="flex flex-center q-pa-lg">
+            <q-spinner size="md" />
+          </div>
+          <q-banner v-else-if="tokenUsageError" class="bg-negative text-white q-mb-sm" rounded>
+            {{ tokenUsageError }}
+            <template #action>
+              <q-btn flat label="Retry" @click="loadTokenUsage" />
+            </template>
+          </q-banner>
+          <q-banner v-else-if="tokenUsageStats && tokenUsageStats.servers.length === 0" class="q-mb-sm" rounded>
+            No token usage data in this period
+          </q-banner>
+          <q-table
+            v-else-if="tokenUsageStats && tokenUsageStats.servers.length > 0"
+            flat bordered dense
+            :rows="filteredTokenUsageRows"
+            :columns="tokenUsageColumns"
+            row-key="__key"
+            :pagination="{ rowsPerPage: 0 }"
+            hide-pagination
+          />
+        </q-card-section>
+      </q-card>
+
       <q-dialog v-model="showAddServer" @hide="resetAddForm">
         <q-card style="width: 400px">
           <q-card-section><div class="text-h6">Add Server</div></q-card-section>
@@ -294,7 +349,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useQuasar, copyToClipboard } from 'quasar';
-import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type TtftStatsResponse, type CircuitStatus } from 'stores/groups';
+import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type TtftStatsResponse, type CircuitStatus, type TokenUsageStats } from 'stores/groups';
 import { useServersStore } from 'stores/servers';
 import { Scatter } from 'vue-chartjs';
 import {
@@ -362,6 +417,38 @@ let ttftRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const ctMappingEntries = ref<{ from: string; to: string }[]>([]);
 const circuitStatuses = ref<CircuitStatus[]>([]);
 let circuitPollTimer: ReturnType<typeof setInterval> | null = null;
+
+// Token usage state
+const tokenUsageStats = ref<TokenUsageStats | null>(null);
+const tokenUsageLoading = ref(false);
+const tokenUsageError = ref('');
+const tokenUsagePeriod = ref('24h');
+const tokenUsageServerFilter = ref<string | null>(null);
+const tokenUsageDynamicKeyFilter = ref(false);
+const tokenUsageKeyHashFilter = ref('');
+
+const tokenUsageServerOptions = computed(() =>
+  servers.value.map((s) => ({ label: s.server_name, value: s.server_id })),
+);
+
+const tokenUsageColumns = [
+  { name: 'server', label: 'Server', field: 'server_name', align: 'left' as const },
+  { name: 'model', label: 'Model', field: 'model', align: 'left' as const, format: (v: string | null) => v || '—' },
+  { name: 'input', label: 'Input Tokens', field: 'total_input_tokens', align: 'right' as const, format: (v: number) => v.toLocaleString() },
+  { name: 'output', label: 'Output Tokens', field: 'total_output_tokens', align: 'right' as const, format: (v: number) => v.toLocaleString() },
+  { name: 'cache_creation', label: 'Cache Creation', field: 'total_cache_creation_tokens', align: 'right' as const, format: (v: number) => v.toLocaleString() },
+  { name: 'cache_read', label: 'Cache Read', field: 'total_cache_read_tokens', align: 'right' as const, format: (v: number) => v.toLocaleString() },
+  { name: 'requests', label: 'Requests', field: 'request_count', align: 'right' as const, format: (v: number) => v.toLocaleString() },
+];
+
+const filteredTokenUsageRows = computed(() => {
+  if (!tokenUsageStats.value) return [];
+  let rows = tokenUsageStats.value.servers;
+  if (tokenUsageServerFilter.value) {
+    rows = rows.filter((r) => r.server_id === tokenUsageServerFilter.value);
+  }
+  return rows.map((r, i) => ({ ...r, __key: `${r.server_id}-${r.model}-${i}` }));
+});
 const visibleKeyBuilderEntries = computed(() =>
   showAllKeyBuilderServers.value
     ? keyBuilderEntries.value
@@ -390,6 +477,7 @@ onMounted(async () => {
   loadTtftStats();
   startTtftRefresh();
   loadCircuitStatus();
+  loadTokenUsage();
 });
 
 onUnmounted(() => {
@@ -476,6 +564,28 @@ function formatCircuitRemaining(seconds: number): string {
   const s = seconds % 60;
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
+
+async function loadTokenUsage() {
+  if (!group.value) return;
+  tokenUsageLoading.value = true;
+  tokenUsageError.value = '';
+  try {
+    const params: { period?: string; is_dynamic_key?: boolean; key_hash?: string } = {
+      period: tokenUsagePeriod.value,
+    };
+    if (tokenUsageDynamicKeyFilter.value) params.is_dynamic_key = true;
+    if (tokenUsageKeyHashFilter.value.trim()) params.key_hash = tokenUsageKeyHashFilter.value.trim();
+    tokenUsageStats.value = await groupsStore.fetchTokenUsageStats(group.value.id, params);
+  } catch {
+    tokenUsageError.value = 'Failed to load token usage data';
+  } finally {
+    tokenUsageLoading.value = false;
+  }
+}
+
+watch(tokenUsagePeriod, () => loadTokenUsage());
+watch(tokenUsageDynamicKeyFilter, () => loadTokenUsage());
+watch(tokenUsageKeyHashFilter, () => loadTokenUsage());
 
 function onCbFieldClear(field: 'cb_max_failures' | 'cb_window_seconds' | 'cb_cooldown_seconds') {
   if (editServerCbForm.value[field] === null || editServerCbForm.value[field] === undefined) {

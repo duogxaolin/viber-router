@@ -1,51 +1,31 @@
-## MODIFIED Requirements
-
-### Requirement: Assign a server to a group
-The system SHALL allow assigning a server to a group with a priority number and optional model_mappings. The Redis cache for the group SHALL be invalidated. The server's short_id SHALL be included in the group-server detail response.
-
-#### Scenario: Successful assignment
-- **WHEN** an authenticated admin sends POST `/api/admin/groups/{group_id}/servers` with `{"server_id": "uuid", "priority": 1, "model_mappings": {"claude-opus-4-6": "my-opus"}}`
-- **THEN** the system SHALL create the group_servers entry, invalidate the group's Redis cache, and the server detail SHALL include the server's short_id
-
-#### Scenario: Duplicate server assignment
-- **WHEN** an authenticated admin assigns a server that is already assigned to the group
-- **THEN** the system SHALL return HTTP 409 with an error message
-
 ## ADDED Requirements
 
-### Requirement: GroupServerDetail includes short_id and optional api_key
-The GroupServerDetail response object SHALL include the server's `short_id` (integer) field. The `api_key` field SHALL be optional (nullable) to reflect that servers may not have a default key.
+### Requirement: Group-server assignment has circuit breaker fields
+The `group_servers` table SHALL include three nullable integer columns: `cb_max_failures`, `cb_window_seconds`, `cb_cooldown_seconds`. All three default to NULL. New assignments SHALL be created with all three as NULL (circuit breaker disabled).
 
-#### Scenario: Server with default key in group detail
-- **WHEN** a group contains a server that has a default api_key and short_id 1
-- **THEN** the GroupServerDetail SHALL include `short_id: 1` and `api_key: "sk-..."`
+#### Scenario: New assignment defaults to no circuit breaker
+- **WHEN** an admin assigns a server to a group without specifying circuit breaker fields
+- **THEN** the assignment SHALL have `cb_max_failures=NULL`, `cb_window_seconds=NULL`, `cb_cooldown_seconds=NULL`
 
-#### Scenario: Server without default key in group detail
-- **WHEN** a group contains a server that has no default api_key and short_id 2
-- **THEN** the GroupServerDetail SHALL include `short_id: 2` and `api_key: null`
-
-### Requirement: Group-server assignment has is_enabled field
-The `group_servers` table SHALL include an `is_enabled` boolean column that defaults to `true`. New server assignments SHALL be created with `is_enabled = true`.
-
-#### Scenario: New server assignment defaults to enabled
-- **WHEN** an authenticated admin sends POST `/api/admin/groups/{group_id}/servers` with `{"server_id": "uuid", "priority": 1}`
-- **THEN** the system SHALL create the assignment with `is_enabled: true`
-
-#### Scenario: GroupServerDetail includes is_enabled
+#### Scenario: GroupServerDetail includes circuit breaker fields
 - **WHEN** the admin fetches a group detail via GET `/api/admin/groups/{group_id}`
-- **THEN** each server in the `servers` array SHALL include `is_enabled: true` or `is_enabled: false`
+- **THEN** each server in the `servers` array SHALL include `cb_max_failures`, `cb_window_seconds`, and `cb_cooldown_seconds` (nullable integers)
 
-### Requirement: Toggle server enabled status within a group
-The system SHALL allow toggling `is_enabled` via the existing update assignment endpoint.
+### Requirement: Update circuit breaker configuration via assignment endpoint
+The system SHALL allow setting circuit breaker fields via PUT `/api/admin/groups/{group_id}/servers/{server_id}`. All three fields MUST be either all null or all non-null (all-or-nothing validation). Each non-null value MUST be >= 1.
 
-#### Scenario: Disable a server in a group
-- **WHEN** an authenticated admin sends PUT `/api/admin/groups/{group_id}/servers/{server_id}` with `{"is_enabled": false}`
-- **THEN** the system SHALL set `is_enabled = false` on the assignment, invalidate the group's Redis cache, and return the updated assignment
+#### Scenario: Set circuit breaker config — all three provided
+- **WHEN** admin sends PUT with `{"cb_max_failures": 5, "cb_window_seconds": 60, "cb_cooldown_seconds": 300}`
+- **THEN** the system SHALL update all three fields, invalidate the group's Redis cache, and return the updated assignment
 
-#### Scenario: Re-enable a server in a group
-- **WHEN** an authenticated admin sends PUT `/api/admin/groups/{group_id}/servers/{server_id}` with `{"is_enabled": true}`
-- **THEN** the system SHALL set `is_enabled = true` on the assignment, invalidate the group's Redis cache, and return the updated assignment
+#### Scenario: Partial circuit breaker config — validation error
+- **WHEN** admin sends PUT with `{"cb_max_failures": 5, "cb_window_seconds": 60}` (missing `cb_cooldown_seconds`)
+- **THEN** the system SHALL return HTTP 400 with error message explaining all-or-nothing requirement
 
-#### Scenario: Toggle does not affect other fields
-- **WHEN** an authenticated admin sends PUT with only `{"is_enabled": false}`
-- **THEN** the system SHALL only change `is_enabled`; `priority` and `model_mappings` SHALL remain unchanged
+#### Scenario: Clear circuit breaker config — all null
+- **WHEN** admin sends PUT with `{"cb_max_failures": null, "cb_window_seconds": null, "cb_cooldown_seconds": null}`
+- **THEN** the system SHALL set all three to NULL and invalidate the group's Redis cache
+
+#### Scenario: Invalid values — validation error
+- **WHEN** admin sends PUT with `{"cb_max_failures": 0, "cb_window_seconds": 60, "cb_cooldown_seconds": 300}`
+- **THEN** the system SHALL return HTTP 400 with error message (values must be >= 1)

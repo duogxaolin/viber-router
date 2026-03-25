@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::{OriginalUri, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -15,8 +15,10 @@ use crate::log_buffer::{FailoverAttempt, ProxyLogEntry};
 use crate::models::{CountTokensServer, GroupConfig, GroupServerDetail};
 use crate::routes::AppState;
 use crate::routes::key_parser::parse_api_key;
+use crate::sse_usage_parser::SseUsageParser;
 use crate::ttft_buffer::TtftLogEntry;
 use crate::telegram_notifier;
+use crate::usage_buffer::{TokenUsageEntry, hash_key};
 
 pub fn router() -> Router<AppState> {
     Router::new().fallback(proxy_handler)
@@ -138,6 +140,45 @@ fn transform_model(body: &[u8], mappings: &serde_json::Value) -> Vec<u8> {
     }
 
     serde_json::to_vec(&json).unwrap_or_else(|_| body.to_vec())
+}
+
+/// Check if a 400 error response body indicates an invalid thinking block signature.
+fn is_thinking_signature_error(response_body: &[u8]) -> bool {
+    let text = match std::str::from_utf8(response_body) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let lower = text.to_lowercase();
+    lower.contains("signature") || lower.contains("thinking")
+}
+
+/// Strip all thinking content blocks from assistant messages in the request body.
+/// Returns `Some(new_body)` if thinking blocks were found and stripped, `None` if no changes needed.
+fn strip_thinking_blocks(body: &[u8]) -> Option<Vec<u8>> {
+    let mut json: Value = serde_json::from_slice(body).ok()?;
+    let messages = json.get_mut("messages")?.as_array_mut()?;
+
+    let mut changed = false;
+    for msg in messages.iter_mut() {
+        if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+            continue;
+        }
+        if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
+            let before_len = content.len();
+            content.retain(|block| {
+                block.get("type").and_then(|t| t.as_str()) != Some("thinking")
+            });
+            if content.len() != before_len {
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        serde_json::to_vec(&json).ok()
+    } else {
+        None
+    }
 }
 
 /// Extract the "model" field from the request body JSON (before any mapping).
@@ -440,7 +481,7 @@ async fn proxy_handler(
         let attempt_headers = Value::Object(server_log_headers);
         let attempt_url = upstream_url.clone();
 
-        upstream_req = upstream_req.body(transformed_body);
+        upstream_req = upstream_req.body(transformed_body.clone());
 
         let server_start = std::time::Instant::now();
         let upstream_resp = match upstream_req.send().await {
@@ -454,7 +495,7 @@ async fn proxy_handler(
                     latency_ms: server_start.elapsed().as_millis() as i32,
                     resolved_key: Some(resolved_key.clone()),
                     upstream_url: Some(attempt_url),
-                    request_headers: Some(attempt_headers),
+                    request_headers: Some(attempt_headers.clone()),
                     request_body: attempt_body,
                 });
                 last_server_id = server.server_id;
@@ -485,11 +526,107 @@ async fn proxy_handler(
             latency_ms: server_latency,
             resolved_key: Some(resolved_key.clone()),
             upstream_url: Some(attempt_url),
-            request_headers: Some(attempt_headers),
+            request_headers: Some(attempt_headers.clone()),
             request_body: attempt_body,
         });
         last_server_id = server.server_id;
         last_server_name = server.server_name.clone();
+
+        // Before failover: intercept 400 thinking signature errors on /v1/messages
+        if status == 400 && request_path == "/v1/messages" {
+            let err_body = upstream_resp.bytes().await.unwrap_or_default();
+            let err_str = String::from_utf8_lossy(&err_body);
+            let is_sig_err = is_thinking_signature_error(&err_body);
+            tracing::warn!(
+                server_name = %server.server_name,
+                status = status,
+                is_thinking_signature_error = is_sig_err,
+                error_body = %err_str,
+                "400 error from upstream"
+            );
+            if is_sig_err
+                && let Some(sanitized_body) = strip_thinking_blocks(&transformed_body)
+            {
+                tracing::info!(
+                    server_name = %server.server_name,
+                    original_body_len = transformed_body.len(),
+                    sanitized_body_len = sanitized_body.len(),
+                    "Retrying after stripping thinking blocks"
+                );
+                let mut retry_req = client.request(method.clone(), &upstream_url);
+                for (name, value) in headers.iter() {
+                    if name == "x-api-key" || name == "authorization" || name == "host" || name == "content-length" {
+                        continue;
+                    }
+                    if let Ok(rn) = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes())
+                        && let Ok(rv) = reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+                    {
+                        retry_req = retry_req.header(rn, rv);
+                    }
+                }
+                retry_req = retry_req.header("x-api-key", &resolved_key);
+                retry_req = retry_req.header("authorization", format!("Bearer {}", resolved_key));
+                retry_req = retry_req.body(sanitized_body);
+
+                if let Ok(retry_resp) = retry_req.send().await {
+                    let retry_status = retry_resp.status().as_u16();
+                    failover_chain.push(FailoverAttempt {
+                        server_id: server.server_id,
+                        server_name: server.server_name.clone(),
+                        status: retry_status,
+                        latency_ms: server_start.elapsed().as_millis() as i32,
+                        resolved_key: Some(resolved_key.clone()),
+                        upstream_url: Some(upstream_url.clone()),
+                        request_headers: Some(attempt_headers.clone()),
+                        request_body: None,
+                    });
+
+                    if retry_status == 200 {
+                        return build_response(retry_resp).await;
+                    } else if config.failover_status_codes.contains(&retry_status) {
+                        continue;
+                    } else {
+                        emit_log_entry(
+                            &state, &config, &parsed.group_key,
+                            last_server_id, &last_server_name,
+                            &request_path, &request_method,
+                            retry_status as i16, "upstream_error",
+                            loop_start.elapsed().as_millis() as i32,
+                            &failover_chain, &request_model,
+                            None, None, None,
+                        );
+                        return build_response(retry_resp).await;
+                    }
+                }
+            }
+            // Signature retry didn't help or not applicable — return original 400
+            emit_log_entry(
+                &state, &config, &parsed.group_key,
+                last_server_id, &last_server_name,
+                &request_path, &request_method,
+                status as i16, "upstream_error",
+                loop_start.elapsed().as_millis() as i32,
+                &failover_chain, &request_model,
+                None, None, None,
+            );
+            let db = state.db.clone();
+            let redis = state.redis.clone();
+            let http_client = state.http_client.clone();
+            let server_id = last_server_id;
+            let server_name = last_server_name.clone();
+            let group_name = config.group_name.clone();
+            let latency = loop_start.elapsed().as_millis() as i32;
+            tokio::spawn(telegram_notifier::maybe_alert(telegram_notifier::AlertContext {
+                db, redis, http_client, server_id, server_name, group_name,
+                status_code: status, latency_ms: latency,
+            }));
+            let mut resp = Response::builder().status(StatusCode::BAD_REQUEST);
+            resp.headers_mut().unwrap().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            return resp.body(Body::from(err_body)).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
 
         // Check if this is a failover status code
         if config.failover_status_codes.contains(&status) {
@@ -508,8 +645,9 @@ async fn proxy_handler(
             continue;
         }
 
-        // Non-failover error — log it
+        // Non-failover error
         if status != 200 {
+
             emit_log_entry(
                 &state, &config, &parsed.group_key,
                 last_server_id, &last_server_name,
@@ -543,7 +681,7 @@ async fn proxy_handler(
             .is_some_and(|ct| ct.contains("text/event-stream"));
 
         if !is_sse {
-            // Non-SSE: log failover chain if applicable, then use existing path
+            // Non-SSE: log failover chain if applicable
             if failover_chain.len() > 1 {
                 emit_log_entry(
                     &state, &config, &parsed.group_key,
@@ -554,6 +692,56 @@ async fn proxy_handler(
                     &failover_chain, &request_model,
                     None, None, None,
                 );
+            }
+            // Extract token usage from non-streaming /v1/messages 200 responses
+            if request_path == "/v1/messages" {
+                let resp_status_code = StatusCode::from_u16(upstream_resp.status().as_u16())
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let mut response_headers = HeaderMap::new();
+                for (name, value) in upstream_resp.headers().iter() {
+                    if let Ok(axum_name) = axum::http::header::HeaderName::from_bytes(name.as_str().as_bytes())
+                        && let Ok(axum_value) = HeaderValue::from_bytes(value.as_bytes())
+                    {
+                        response_headers.insert(axum_name, axum_value);
+                    }
+                }
+                let body_bytes = upstream_resp.bytes().await.unwrap_or_default();
+                // Try to extract usage
+                if let Ok(json) = serde_json::from_slice::<Value>(&body_bytes)
+                    && let Some(usage) = json.get("usage")
+                {
+                    let input = usage.get("input_tokens").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let output = usage.get("output_tokens").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    if let (Some(inp), Some(out)) = (input, output) {
+                        let is_dk = parsed.dynamic_keys.contains_key(&server.short_id);
+                        let kh = {
+                            let raw = if let Some(dk) = parsed.dynamic_keys.get(&server.short_id) {
+                                dk.clone()
+                            } else {
+                                server.api_key.clone().unwrap_or_default()
+                            };
+                            if raw.is_empty() { None } else { Some(hash_key(&raw)) }
+                        };
+                        let entry = TokenUsageEntry {
+                            group_id: config.group_id,
+                            server_id: server.server_id,
+                            model: request_model.clone(),
+                            input_tokens: inp,
+                            output_tokens: out,
+                            cache_creation_tokens: usage.get("cache_creation_input_tokens").and_then(|v| v.as_i64()).map(|v| v as i32),
+                            cache_read_tokens: usage.get("cache_read_input_tokens").and_then(|v| v.as_i64()).map(|v| v as i32),
+                            is_dynamic_key: is_dk,
+                            key_hash: kh,
+                            created_at: Utc::now(),
+                        };
+                        if state.usage_tx.try_send(entry).is_err() {
+                            tracing::warn!("Usage buffer full, dropping token usage entry");
+                        }
+                    }
+                }
+                let mut resp = Response::builder().status(resp_status_code);
+                *resp.headers_mut().unwrap() = response_headers;
+                return resp.body(Body::from(body_bytes)).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
             }
             return build_response(upstream_resp).await;
         }
@@ -627,9 +815,26 @@ async fn proxy_handler(
                         );
                     }
 
-                    let first = futures_util::stream::once(async move { Ok::<_, std::io::Error>(first_chunk) });
+                    let first = futures_util::stream::iter(std::iter::once(Ok::<_, std::io::Error>(first_chunk)));
                     let rest = stream.map(|chunk| chunk.map_err(std::io::Error::other));
-                    let body = Body::from_stream(first.chain(rest));
+                    let combined = first.chain(rest);
+                    let body = if request_path == "/v1/messages" {
+                        let is_dk = parsed.dynamic_keys.contains_key(&server.short_id);
+                        let kh = {
+                            let raw = if let Some(dk) = parsed.dynamic_keys.get(&server.short_id) {
+                                dk.clone()
+                            } else {
+                                server.api_key.clone().unwrap_or_default()
+                            };
+                            if raw.is_empty() { None } else { Some(hash_key(&raw)) }
+                        };
+                        Body::from_stream(wrap_stream_with_usage_tracking(
+                            combined, state.clone(), config.group_id, server.server_id,
+                            request_model.clone(), is_dk, kh,
+                        ))
+                    } else {
+                        Body::from_stream(combined)
+                    };
                     let mut resp = Response::builder().status(resp_status);
                     *resp.headers_mut().unwrap() = response_headers;
                     return resp.body(body).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
@@ -690,9 +895,26 @@ async fn proxy_handler(
                         );
                     }
 
-                    let first = futures_util::stream::once(async move { Ok::<_, std::io::Error>(first_chunk) });
+                    let first = futures_util::stream::iter(std::iter::once(Ok::<_, std::io::Error>(first_chunk)));
                     let rest = stream.map(|chunk| chunk.map_err(std::io::Error::other));
-                    let body = Body::from_stream(first.chain(rest));
+                    let combined = first.chain(rest);
+                    let body = if request_path == "/v1/messages" {
+                        let is_dk = parsed.dynamic_keys.contains_key(&server.short_id);
+                        let kh = {
+                            let raw = if let Some(dk) = parsed.dynamic_keys.get(&server.short_id) {
+                                dk.clone()
+                            } else {
+                                server.api_key.clone().unwrap_or_default()
+                            };
+                            if raw.is_empty() { None } else { Some(hash_key(&raw)) }
+                        };
+                        Body::from_stream(wrap_stream_with_usage_tracking(
+                            combined, state.clone(), config.group_id, server.server_id,
+                            request_model.clone(), is_dk, kh,
+                        ))
+                    } else {
+                        Body::from_stream(combined)
+                    };
                     let mut resp = Response::builder().status(resp_status);
                     *resp.headers_mut().unwrap() = response_headers;
                     return resp.body(body).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
@@ -773,6 +995,98 @@ async fn proxy_handler(
         HeaderValue::from_static("30"),
     );
     resp
+}
+
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+struct UsageTrackingStream<S> {
+    inner: S,
+    parser: Option<SseUsageParser>,
+    state: AppState,
+    group_id: uuid::Uuid,
+    server_id: uuid::Uuid,
+    model: Option<String>,
+    is_dynamic_key: bool,
+    key_hash: Option<String>,
+    done: bool,
+}
+
+impl<S> futures_util::Stream for UsageTrackingStream<S>
+where
+    S: futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+{
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                if let Some(ref mut parser) = this.parser {
+                    parser.feed(&chunk);
+                }
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            Poll::Ready(Some(Err(e))) => {
+                this.parser = None;
+                this.done = true;
+                Poll::Ready(Some(Err(e)))
+            }
+            Poll::Ready(None) => {
+                this.done = true;
+                if let Some(parser) = this.parser.take()
+                    && let Some(usage) = parser.finish()
+                {
+                    let entry = TokenUsageEntry {
+                        group_id: this.group_id,
+                        server_id: this.server_id,
+                        model: this.model.clone(),
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                        cache_creation_tokens: usage.cache_creation_tokens,
+                        cache_read_tokens: usage.cache_read_tokens,
+                        is_dynamic_key: this.is_dynamic_key,
+                        key_hash: this.key_hash.clone(),
+                        created_at: Utc::now(),
+                    };
+                    if this.state.usage_tx.try_send(entry).is_err() {
+                        tracing::warn!("Usage buffer full, dropping token usage entry");
+                    }
+                }
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wrap_stream_with_usage_tracking<S>(
+    stream: S,
+    state: AppState,
+    group_id: uuid::Uuid,
+    server_id: uuid::Uuid,
+    model: Option<String>,
+    is_dynamic_key: bool,
+    key_hash: Option<String>,
+) -> UsageTrackingStream<S>
+where
+    S: futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+{
+    UsageTrackingStream {
+        inner: stream,
+        parser: Some(SseUsageParser::new()),
+        state,
+        group_id,
+        server_id,
+        model,
+        is_dynamic_key,
+        key_hash,
+        done: false,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -935,5 +1249,82 @@ mod tests {
         assert!(codes.contains(&500));
         assert!(!codes.contains(&400));
         assert!(!codes.contains(&200));
+    }
+
+    #[test]
+    fn test_is_thinking_signature_error_with_signature() {
+        let body = br#"{"error":{"type":"<nil>","message":"Invalid `signature` in `thinking` block"}}"#;
+        assert!(is_thinking_signature_error(body));
+    }
+
+    #[test]
+    fn test_is_thinking_signature_error_with_thinking() {
+        let body = br#"{"error":{"message":"Invalid thinking block content"}}"#;
+        assert!(is_thinking_signature_error(body));
+    }
+
+    #[test]
+    fn test_is_thinking_signature_error_unrelated() {
+        let body = br#"{"error":{"message":"Invalid model specified"}}"#;
+        assert!(!is_thinking_signature_error(body));
+    }
+
+    #[test]
+    fn test_strip_thinking_blocks_removes_thinking() {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "model": "claude-opus-4-6",
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "let me think", "signature": "abc123"},
+                    {"type": "text", "text": "Hi there"}
+                ]},
+                {"role": "user", "content": "follow up"}
+            ]
+        })).unwrap();
+
+        let result = strip_thinking_blocks(&body).unwrap();
+        let parsed: Value = serde_json::from_slice(&result).unwrap();
+        let assistant_content = parsed["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(assistant_content.len(), 1);
+        assert_eq!(assistant_content[0]["type"], "text");
+    }
+
+    #[test]
+    fn test_strip_thinking_blocks_no_thinking_returns_none() {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "model": "claude-opus-4-6",
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "Hi there"}
+                ]}
+            ]
+        })).unwrap();
+
+        assert!(strip_thinking_blocks(&body).is_none());
+    }
+
+    #[test]
+    fn test_strip_thinking_blocks_preserves_user_messages() {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "model": "claude-opus-4-6",
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "hello"}
+                ]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "hmm", "signature": ""},
+                    {"type": "text", "text": "response"}
+                ]}
+            ]
+        })).unwrap();
+
+        let result = strip_thinking_blocks(&body).unwrap();
+        let parsed: Value = serde_json::from_slice(&result).unwrap();
+        // User message content untouched
+        let user_content = parsed["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(user_content.len(), 1);
+        assert_eq!(user_content[0]["type"], "text");
     }
 }

@@ -67,6 +67,21 @@ export interface TtftStatsResponse {
   servers: ServerTtftStats[];
 }
 
+export interface ServerTokenUsage {
+  server_id: string;
+  server_name: string;
+  model: string | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_creation_tokens: number;
+  total_cache_read_tokens: number;
+  request_count: number;
+}
+
+export interface TokenUsageStats {
+  servers: ServerTokenUsage[];
+}
+
 export const useGroupsStore = defineStore('groups', () => {
   const groups = ref<Group[]>([]);
   const total = ref(0);
@@ -176,11 +191,25 @@ export const useGroupsStore = defineStore('groups', () => {
     return data;
   }
 
+  async function fetchTokenUsageStats(
+    groupId: string,
+    params?: { start?: string; end?: string; period?: string; is_dynamic_key?: boolean; key_hash?: string },
+  ) {
+    const qp: Record<string, string> = { group_id: groupId };
+    if (params?.start) qp.start = params.start;
+    if (params?.end) qp.end = params.end;
+    if (params?.period) qp.period = params.period;
+    if (params?.is_dynamic_key !== undefined) qp.is_dynamic_key = String(params.is_dynamic_key);
+    if (params?.key_hash) qp.key_hash = params.key_hash;
+    const { data } = await api.get<TokenUsageStats>('/api/admin/token-usage', { params: qp });
+    return data;
+  }
+
   return {
     groups, total, totalPages, loading,
     fetchGroups, getGroup, createGroup, updateGroup, deleteGroup, regenerateKey,
     bulkActivate, bulkDeactivate, bulkDelete, bulkAssignServer,
     assignServer, updateAssignment, removeServer, reorderServers,
-    fetchTtftStats, fetchCircuitStatus,
+    fetchTtftStats, fetchCircuitStatus, fetchTokenUsageStats,
   };
 });

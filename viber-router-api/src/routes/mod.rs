@@ -10,6 +10,7 @@ mod proxy;
 
 use crate::log_buffer::ProxyLogEntry;
 use crate::ttft_buffer::TtftLogEntry;
+use crate::usage_buffer::TokenUsageEntry;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,6 +20,7 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub log_tx: mpsc::Sender<ProxyLogEntry>,
     pub ttft_tx: mpsc::Sender<TtftLogEntry>,
+    pub usage_tx: mpsc::Sender<TokenUsageEntry>,
 }
 
 pub fn router(state: AppState) -> Router {
