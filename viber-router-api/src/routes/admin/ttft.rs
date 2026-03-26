@@ -22,6 +22,7 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
 #[derive(Debug, Deserialize)]
 pub struct TtftStatsParams {
     pub group_id: Option<Uuid>,
+    pub group_key_id: Option<Uuid>,
     pub period: Option<String>,
     /// Absolute time range (ISO 8601). When both are provided, `period` is ignored.
     pub start: Option<chrono::DateTime<chrono::Utc>>,
@@ -92,9 +93,20 @@ async fn get_ttft_stats(
     let group_id = params.group_id
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "group_id is required"))?;
 
+    let key_filter = if params.group_key_id.is_some() {
+        " AND t.group_key_id = $4"
+    } else {
+        ""
+    };
+    let key_filter_rel = if params.group_key_id.is_some() {
+        " AND t.group_key_id = $2"
+    } else {
+        ""
+    };
+
     // Absolute range takes priority; fall back to relative period
     let (agg_rows, all_points) = if let (Some(start), Some(end)) = (params.start, params.end) {
-        let agg = sqlx::query_as::<_, AggRow>(
+        let agg = sqlx::query_as::<_, AggRow>(&format!(
             "SELECT t.server_id, s.name as server_name, \
              AVG(t.ttft_ms)::float8 as avg_ttft_ms, \
              PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.ttft_ms)::float8 as p50_ttft_ms, \
@@ -102,25 +114,27 @@ async fn get_ttft_stats(
              COUNT(*) FILTER (WHERE t.timed_out) as timeout_count, \
              COUNT(*) as total_count \
              FROM ttft_logs t JOIN servers s ON s.id = t.server_id \
-             WHERE t.group_id = $1 AND t.created_at >= $2 AND t.created_at < $3 \
+             WHERE t.group_id = $1 AND t.created_at >= $2 AND t.created_at < $3{key_filter} \
              GROUP BY t.server_id, s.name \
              ORDER BY s.name",
-        )
+        ))
         .bind(group_id)
         .bind(start)
         .bind(end)
+        .bind(params.group_key_id)
         .fetch_all(&state.db)
         .await
         .map_err(internal)?;
 
-        let pts = sqlx::query_as::<_, TtftDataPoint>(
+        let pts = sqlx::query_as::<_, TtftDataPoint>(&format!(
             "SELECT t.server_id, t.created_at, t.ttft_ms, t.timed_out FROM ttft_logs t \
-             WHERE t.group_id = $1 AND t.created_at >= $2 AND t.created_at < $3 \
+             WHERE t.group_id = $1 AND t.created_at >= $2 AND t.created_at < $3{key_filter} \
              ORDER BY t.created_at",
-        )
+        ))
         .bind(group_id)
         .bind(start)
         .bind(end)
+        .bind(params.group_key_id)
         .fetch_all(&state.db)
         .await
         .map_err(internal)?;
@@ -137,21 +151,23 @@ async fn get_ttft_stats(
              COUNT(*) FILTER (WHERE t.timed_out) as timeout_count, \
              COUNT(*) as total_count \
              FROM ttft_logs t JOIN servers s ON s.id = t.server_id \
-             WHERE t.group_id = $1 AND t.created_at > now() - interval '{interval}' \
+             WHERE t.group_id = $1 AND t.created_at > now() - interval '{interval}'{key_filter_rel} \
              GROUP BY t.server_id, s.name \
              ORDER BY s.name"
         ))
         .bind(group_id)
+        .bind(params.group_key_id)
         .fetch_all(&state.db)
         .await
         .map_err(internal)?;
 
         let pts = sqlx::query_as::<_, TtftDataPoint>(&format!(
             "SELECT t.server_id, t.created_at, t.ttft_ms, t.timed_out FROM ttft_logs t \
-             WHERE t.group_id = $1 AND t.created_at > now() - interval '{interval}' \
+             WHERE t.group_id = $1 AND t.created_at > now() - interval '{interval}'{key_filter_rel} \
              ORDER BY t.created_at"
         ))
         .bind(group_id)
+        .bind(params.group_key_id)
         .fetch_all(&state.db)
         .await
         .map_err(internal)?;

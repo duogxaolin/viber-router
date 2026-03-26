@@ -12,6 +12,7 @@ pub struct TtftLogEntry {
     pub timed_out: bool,
     pub request_path: String,
     pub created_at: DateTime<Utc>,
+    pub group_key_id: Option<Uuid>,
 }
 
 const BATCH_SIZE: usize = 100;
@@ -62,6 +63,7 @@ async fn flush_batch(pool: &PgPool, entries: &[TtftLogEntry]) {
     let mut ttft_mss: Vec<Option<i32>> = Vec::with_capacity(len);
     let mut timed_outs = Vec::with_capacity(len);
     let mut request_paths = Vec::with_capacity(len);
+    let mut group_key_ids: Vec<Option<Uuid>> = Vec::with_capacity(len);
 
     for e in entries {
         ids.push(Uuid::new_v4());
@@ -72,14 +74,15 @@ async fn flush_batch(pool: &PgPool, entries: &[TtftLogEntry]) {
         ttft_mss.push(e.ttft_ms);
         timed_outs.push(e.timed_out);
         request_paths.push(e.request_path.clone());
+        group_key_ids.push(e.group_key_id);
     }
 
     let result = sqlx::query(
         "INSERT INTO ttft_logs \
-         (id, created_at, group_id, server_id, request_model, ttft_ms, timed_out, request_path) \
+         (id, created_at, group_id, server_id, request_model, ttft_ms, timed_out, request_path, group_key_id) \
          SELECT * FROM UNNEST(\
            $1::uuid[], $2::timestamptz[], $3::uuid[], $4::uuid[], \
-           $5::text[], $6::integer[], $7::boolean[], $8::text[])",
+           $5::text[], $6::integer[], $7::boolean[], $8::text[], $9::uuid[])",
     )
     .bind(&ids)
     .bind(&created_ats)
@@ -89,6 +92,7 @@ async fn flush_batch(pool: &PgPool, entries: &[TtftLogEntry]) {
     .bind(&ttft_mss)
     .bind(&timed_outs)
     .bind(&request_paths)
+    .bind(&group_key_ids)
     .execute(pool)
     .await;
 
@@ -111,6 +115,7 @@ mod tests {
             timed_out: false,
             request_path: "/v1/messages".to_string(),
             created_at: Utc::now(),
+            group_key_id: None,
         }
     }
 

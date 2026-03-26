@@ -850,7 +850,7 @@ async fn proxy_handler(
                 if let Some(last) = failover_chain.last_mut() {
                     last.status = 0;
                 }
-                emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path);
+                emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path, config.group_key_id);
                 // Circuit breaker: record TTFT timeout as error
                 if has_cb {
                     let tripped = circuit_breaker::record_error(
@@ -874,7 +874,7 @@ async fn proxy_handler(
                 Ok(Some(Ok(first_chunk))) => {
                     // First chunk received within timeout
                     let ttft_ms = server_start.elapsed().as_millis() as i32;
-                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, Some(ttft_ms), false, &request_path);
+                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, Some(ttft_ms), false, &request_path, config.group_key_id);
 
                     // Log failover chain if this wasn't the first server tried
                     if failover_chain.len() > 1 {
@@ -918,7 +918,7 @@ async fn proxy_handler(
                     if let Some(last) = failover_chain.last_mut() {
                         last.status = 0;
                     }
-                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, false, &request_path);
+                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, false, &request_path, config.group_key_id);
                     if has_cb {
                         let tripped = circuit_breaker::record_error(
                             &state.redis, config.group_id, server.server_id,
@@ -936,7 +936,7 @@ async fn proxy_handler(
                     if let Some(last) = failover_chain.last_mut() {
                         last.status = 0;
                     }
-                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path);
+                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path, config.group_key_id);
                     if has_cb {
                         let tripped = circuit_breaker::record_error(
                             &state.redis, config.group_id, server.server_id,
@@ -954,7 +954,7 @@ async fn proxy_handler(
             match stream.next().await {
                 Some(Ok(first_chunk)) => {
                     let ttft_ms = server_start.elapsed().as_millis() as i32;
-                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, Some(ttft_ms), false, &request_path);
+                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, Some(ttft_ms), false, &request_path, config.group_key_id);
 
                     // Log failover chain if this wasn't the first server tried
                     if failover_chain.len() > 1 {
@@ -995,7 +995,7 @@ async fn proxy_handler(
                 }
                 Some(Err(_)) | None => {
                     // Empty stream or error — treat as connection error
-                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, false, &request_path);
+                    emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, false, &request_path, config.group_key_id);
                     if has_cb {
                         let tripped = circuit_breaker::record_error(
                             &state.redis, config.group_id, server.server_id,
@@ -1208,6 +1208,7 @@ fn emit_log_entry(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_ttft_entry(
     state: &AppState,
     group_id: uuid::Uuid,
@@ -1216,6 +1217,7 @@ fn emit_ttft_entry(
     ttft_ms: Option<i32>,
     timed_out: bool,
     request_path: &str,
+    group_key_id: Option<uuid::Uuid>,
 ) {
     let entry = TtftLogEntry {
         group_id,
@@ -1225,6 +1227,7 @@ fn emit_ttft_entry(
         timed_out,
         request_path: request_path.to_string(),
         created_at: Utc::now(),
+        group_key_id,
     };
 
     if state.ttft_tx.try_send(entry).is_err() {

@@ -172,8 +172,11 @@
                     </q-td>
                   </q-tr>
                   <q-tr v-if="props.expand" :props="props">
-                    <q-td colspan="4">
+                    <q-td colspan="4" class="q-pa-sm">
                       <SubKeyUsage :group-id="group?.id ?? ''" :group-key-id="props.row.id" />
+                      <div class="q-mt-sm">
+                        <TtftChart :group-id="group?.id ?? ''" :group-key-id="props.row.id" />
+                      </div>
                     </q-td>
                   </q-tr>
                 </template>
@@ -187,64 +190,18 @@
 
         <!-- TTFT Tab -->
         <q-tab-panel name="ttft" class="q-pa-none">
-          <q-card flat bordered>
-            <q-card-section>
-              <div class="row items-center q-mb-sm">
-                <q-btn flat dense round icon="chevron_left" :disable="ttftBlockOffset >= ttftMaxOffset" @click="ttftBlockOffset++" />
-                <div class="text-subtitle1 q-mx-sm">TTFT — {{ ttftBlockLabel }}</div>
-                <q-btn flat dense round icon="chevron_right" :disable="ttftBlockOffset <= 0" @click="ttftBlockOffset--" />
-                <q-space />
-                <q-btn-toggle
-                  v-model="ttftWindowHours"
-                  flat dense no-caps
-              toggle-color="primary"
-              :options="[
-                { label: '1h', value: 1 },
-                { label: '4h', value: 4 },
-                { label: '8h', value: 8 },
-                { label: '12h', value: 12 },
-                { label: '24h', value: 24 },
-              ]"
-            />
-          </div>
-          <div v-if="ttftLoading && !ttftStats" class="flex flex-center q-pa-lg">
-            <q-spinner size="md" />
-          </div>
-          <q-banner v-else-if="ttftError" class="bg-negative text-white q-mb-sm" rounded>
-            {{ ttftError }}
-          </q-banner>
-          <div v-else-if="ttftChartData" style="height: 300px">
-            <Scatter :key="ttftBlockOffset" :data="ttftChartData" :options="ttftChartOptions" />
-          </div>
-          <div v-else class="text-grey text-center q-pa-lg flex flex-center" style="height: 300px">
-            No TTFT data in this period
-          </div>
-          <div v-if="ttftStats && ttftStats.servers.length > 0" class="q-mt-md">
-            <q-markup-table flat bordered dense>
-              <thead>
-                <tr>
-                  <th class="text-left">Server</th>
-                  <th class="text-right">Avg</th>
-                  <th class="text-right">P50</th>
-                  <th class="text-right">P95</th>
-                  <th class="text-right">Timeouts</th>
-                  <th class="text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="s in ttftStats.servers" :key="s.server_id">
-                  <td>{{ s.server_name }}</td>
-                  <td class="text-right">{{ s.avg_ttft_ms != null ? `${Math.round(s.avg_ttft_ms)}ms` : '—' }}</td>
-                  <td class="text-right">{{ s.p50_ttft_ms != null ? `${Math.round(s.p50_ttft_ms)}ms` : '—' }}</td>
-                  <td class="text-right">{{ s.p95_ttft_ms != null ? `${Math.round(s.p95_ttft_ms)}ms` : '—' }}</td>
-                  <td class="text-right">{{ s.timeout_count }}</td>
-                  <td class="text-right">{{ s.total_count }}</td>
-                </tr>
-              </tbody>
-            </q-markup-table>
-          </div>
-            </q-card-section>
-          </q-card>
+          <TtftChart :group-id="group?.id ?? ''" :group-key-id="ttftKeyFilter || undefined">
+            <template #filter>
+              <q-select
+                v-model="ttftKeyFilter"
+                :options="ttftKeyOptions"
+                emit-value map-options
+                outlined dense
+                style="min-width: 180px"
+                class="q-mr-sm"
+              />
+            </template>
+          </TtftChart>
         </q-tab-panel>
 
         <!-- Token Usage Tab -->
@@ -426,28 +383,10 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useQuasar, copyToClipboard } from 'quasar';
-import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type TtftStatsResponse, type CircuitStatus, type TokenUsageStats, type GroupKey } from 'stores/groups';
+import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type CircuitStatus, type TokenUsageStats, type GroupKey } from 'stores/groups';
 import { useServersStore } from 'stores/servers';
-import { Scatter } from 'vue-chartjs';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  TimeScale,
-} from 'chart.js';
-import 'chartjs-adapter-date-fns';
 import SubKeyUsage from 'components/SubKeyUsage.vue';
-
-import type { TooltipItem } from 'chart.js';
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, TimeScale);
-
-const CHART_COLORS = ['#1976D2', '#26A69A', '#FF6F00', '#AB47BC', '#EF5350', '#66BB6A', '#42A5F5', '#FFA726'];
+import TtftChart from 'components/TtftChart.vue';
 
 const $q = useQuasar();
 const route = useRoute();
@@ -490,12 +429,7 @@ const keyBuilderEntries = ref<{ server_id: string; server_name: string; short_id
 const showAllKeyBuilderServers = ref(false);
 
 const ttftTimeoutStr = ref('');
-const ttftStats = ref<TtftStatsResponse | null>(null);
-const ttftLoading = ref(false);
-const ttftError = ref('');
-const ttftBlockOffset = ref(0);
-const ttftWindowHours = ref(4);
-let ttftRefreshTimer: ReturnType<typeof setInterval> | null = null;
+const ttftKeyFilter = ref<string | null>(null);
 const ctMappingEntries = ref<{ from: string; to: string }[]>([]);
 const circuitStatuses = ref<CircuitStatus[]>([]);
 let circuitPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -518,6 +452,11 @@ const subKeyPagination = ref({ page: 1, rowsPerPage: 50, rowsNumber: 0, sortBy: 
 const showCreateKey = ref(false);
 const newKeyName = ref('');
 const creatingKey = ref(false);
+
+const ttftKeyOptions = computed(() => [
+  { label: 'All keys', value: null },
+  ...subKeys.value.map((k) => ({ label: k.name, value: k.id })),
+]);
 
 const subKeyColumns = [
   { name: 'name', label: 'Name', field: 'name', align: 'left' as const },
@@ -573,41 +512,16 @@ onMounted(async () => {
   if (sData) {
     allServers.value = sData.data.map((s) => ({ label: `${s.name} (#${s.short_id})`, value: s.id }));
   }
-  loadTtftStats();
-  startTtftRefresh();
+  loadTtftKeys();
   loadCircuitStatus();
   loadTokenUsage();
 });
 
 onUnmounted(() => {
-  stopTtftRefresh();
   stopCircuitPoll();
 });
 
-function startTtftRefresh() {
-  stopTtftRefresh();
-  if (ttftBlockOffset.value === 0) {
-    ttftRefreshTimer = setInterval(loadTtftStats, 30_000);
-  }
-}
 
-function stopTtftRefresh() {
-  if (ttftRefreshTimer) {
-    clearInterval(ttftRefreshTimer);
-    ttftRefreshTimer = null;
-  }
-}
-
-watch(ttftBlockOffset, () => {
-  loadTtftStats();
-  startTtftRefresh();
-});
-
-watch(ttftWindowHours, () => {
-  ttftBlockOffset.value = 0;
-  loadTtftStats();
-  startTtftRefresh();
-});
 
 async function loadGroup() {
   const id = route.params.id as string;
@@ -763,7 +677,6 @@ async function onRegenerateSubKey(row: GroupKey) {
 watch(activeTab, (tab) => {
   router.replace({ query: { ...route.query, tab } });
   if (tab === 'keys' && subKeys.value.length === 0) loadSubKeys();
-  if (tab === 'ttft') loadTtftStats();
   if (tab === 'token-usage') loadTokenUsage();
 });
 
@@ -980,115 +893,17 @@ async function onSaveEditServer() {
   }
 }
 
-const ttftBlockRange = computed(() => {
-  const now = new Date();
-  const windowMs = ttftWindowHours.value * 60 * 60 * 1000;
-  const end = new Date(now.getTime() - ttftBlockOffset.value * windowMs);
-  const start = new Date(end.getTime() - windowMs);
-  return { start, end };
-});
-
-const ttftMaxOffset = computed(() => Math.floor(7 * 24 / ttftWindowHours.value));
-
-const ttftBlockLabel = computed(() => {
-  const { start, end } = ttftBlockRange.value;
-  const fmt = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const dateFmt = (d: Date) => d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  const startDate = dateFmt(start);
-  const endDate = dateFmt(end);
-  const today = dateFmt(new Date());
-  const dateStr = startDate === today ? 'Today' : startDate !== endDate ? `${startDate} – ${endDate}` : startDate;
-  return `${fmt(start)} – ${fmt(end)}, ${dateStr}`;
-});
-
-async function loadTtftStats() {
+async function loadTtftKeys() {
   if (!group.value) return;
-  ttftLoading.value = true;
-  ttftError.value = '';
-  try {
-    const { start, end } = ttftBlockRange.value;
-    ttftStats.value = await groupsStore.fetchTtftStats(group.value.id, {
-      start: start.toISOString(),
-      end: end.toISOString(),
-    });
-  } catch {
-    ttftError.value = 'Failed to load TTFT data';
-  } finally {
-    ttftLoading.value = false;
+  if (subKeys.value.length === 0) {
+    try {
+      const data = await groupsStore.fetchGroupKeys(group.value.id, { limit: 100 });
+      subKeys.value = data.data;
+    } catch {
+      // silently fail — dropdown just shows "All keys"
+    }
   }
 }
-
-const ttftChartData = computed(() => {
-  if (!ttftStats.value || ttftStats.value.servers.length === 0) return null;
-
-  const datasets = ttftStats.value.servers
-    .map((server, idx) => {
-      const color = CHART_COLORS[idx % CHART_COLORS.length] as string;
-
-      const data: { x: number; y: number }[] = [];
-      const bgColors: string[] = [];
-      const radii: number[] = [];
-      const styles: string[] = [];
-
-      for (const p of server.data_points) {
-        const x = new Date(p.created_at).getTime();
-        if (p.timed_out) {
-          data.push({ x, y: 0 });
-          bgColors.push('#EF5350');
-          radii.push(6);
-          styles.push('crossRot');
-        } else if (p.ttft_ms != null) {
-          data.push({ x, y: p.ttft_ms });
-          bgColors.push(color);
-          radii.push(4);
-          styles.push('circle');
-        }
-      }
-
-      return {
-        label: server.server_name,
-        data,
-        backgroundColor: bgColors,
-        borderColor: 'transparent',
-        pointRadius: radii,
-        pointStyle: styles,
-      };
-    })
-    .filter((d) => d.data.length > 0);
-
-  if (datasets.length === 0) return null;
-
-  return { datasets };
-});
-
-const ttftChartOptions = computed(() => ({
-  responsive: true,
-  maintainAspectRatio: false,
-  animation: false as const,
-  scales: {
-    x: {
-      type: 'time' as const,
-      time: { unit: 'minute' as const, displayFormats: { minute: 'HH:mm' }, tooltipFormat: 'HH:mm:ss' },
-      min: ttftBlockRange.value.start.getTime(),
-      max: ttftBlockRange.value.end.getTime(),
-      title: { display: false },
-      ticks: { maxTicksLimit: 10 },
-    },
-    y: { beginAtZero: true, title: { display: true, text: 'TTFT (ms)' } },
-  },
-  plugins: {
-    legend: { position: 'top' as const },
-    tooltip: {
-      callbacks: {
-        label: function (this: unknown, ctx: TooltipItem<'scatter'>) {
-          const label = ctx.dataset?.label || '';
-          if (ctx.parsed?.y === 0) return `${label} (timeout)`;
-          return `${label}: ${ctx.parsed?.y}ms`;
-        },
-      },
-    },
-  },
-}));
 </script>
 
 <style scoped>
