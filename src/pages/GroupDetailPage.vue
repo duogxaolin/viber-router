@@ -424,7 +424,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useQuasar, copyToClipboard } from 'quasar';
 import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type TtftStatsResponse, type CircuitStatus, type TokenUsageStats, type GroupKey } from 'stores/groups';
 import { useServersStore } from 'stores/servers';
@@ -451,13 +451,16 @@ const CHART_COLORS = ['#1976D2', '#26A69A', '#FF6F00', '#AB47BC', '#EF5350', '#6
 
 const $q = useQuasar();
 const route = useRoute();
+const router = useRouter();
 const groupsStore = useGroupsStore();
 const serversStore = useServersStore();
 
 const group = ref<GroupWithServers | null>(null);
 const servers = ref<GroupServerDetail[]>([]);
 const failoverCodesStr = ref('');
-const activeTab = ref('properties');
+const validTabs = ['properties', 'servers', 'keys', 'ttft', 'token-usage'];
+const initialTab = validTabs.includes(route.query.tab as string) ? (route.query.tab as string) : 'properties';
+const activeTab = ref(initialTab);
 
 const CREATE_NEW = '__create_new__';
 const showAddServer = ref(false);
@@ -758,6 +761,7 @@ async function onRegenerateSubKey(row: GroupKey) {
 }
 
 watch(activeTab, (tab) => {
+  router.replace({ query: { ...route.query, tab } });
   if (tab === 'keys' && subKeys.value.length === 0) loadSubKeys();
   if (tab === 'ttft') loadTtftStats();
   if (tab === 'token-usage') loadTokenUsage();
