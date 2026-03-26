@@ -599,7 +599,22 @@ async fn proxy_handler(
                     }
                 }
             }
-            // Signature retry didn't help or not applicable — return original 400
+            // Signature retry didn't help or not applicable
+            // Check failover_status_codes before giving up — 400 may be configured for failover
+            if config.failover_status_codes.contains(&status) {
+                if has_cb {
+                    let tripped = circuit_breaker::record_error(
+                        &state.redis, config.group_id, server.server_id,
+                        server.cb_max_failures.unwrap(),
+                        server.cb_window_seconds.unwrap(),
+                        server.cb_cooldown_seconds.unwrap(),
+                    ).await;
+                    if tripped {
+                        spawn_cb_alert(&state, &config, server);
+                    }
+                }
+                continue;
+            }
             emit_log_entry(
                 &state, &config, &parsed.group_key,
                 last_server_id, &last_server_name,
