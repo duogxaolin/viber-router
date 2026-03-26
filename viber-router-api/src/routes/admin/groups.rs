@@ -57,6 +57,7 @@ pub fn router() -> Router<AppState> {
         .route("/bulk/delete", post(bulk_delete))
         .route("/bulk/assign-server", post(bulk_assign_server))
         .nest("/{group_id}/servers", super::group_servers::router())
+        .nest("/{group_id}/keys", super::group_keys::router())
 }
 
 async fn create_group(
@@ -267,7 +268,7 @@ async fn update_group(
     .map_err(internal)?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Group not found"))?;
 
-    crate::cache::invalidate_group_config(&state.redis, &group.api_key).await;
+    crate::cache::invalidate_group_all_keys(&state.redis, &state.db, id).await;
     Ok(Json(group))
 }
 
@@ -275,12 +276,18 @@ async fn delete_group(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let group = sqlx::query_as::<_, Group>("SELECT * FROM groups WHERE id = $1")
+    // Verify group exists
+    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM groups WHERE id = $1)")
         .bind(id)
-        .fetch_optional(&state.db)
+        .fetch_one(&state.db)
         .await
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Group not found"))?;
+        .map_err(internal)?;
+    if !exists {
+        return Err(err(StatusCode::NOT_FOUND, "Group not found"));
+    }
+
+    // Invalidate before delete (sub-keys will be cascade-deleted)
+    crate::cache::invalidate_group_all_keys(&state.redis, &state.db, id).await;
 
     sqlx::query("DELETE FROM groups WHERE id = $1")
         .bind(id)
@@ -288,7 +295,6 @@ async fn delete_group(
         .await
         .map_err(internal)?;
 
-    crate::cache::invalidate_group_config(&state.redis, &group.api_key).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -313,7 +319,9 @@ async fn regenerate_key(
     .await
     .map_err(internal)?;
 
+    // Invalidate old master key + all sub-keys (sub-keys cache the same GroupConfig)
     crate::cache::invalidate_group_config(&state.redis, &old_group.api_key).await;
+    crate::cache::invalidate_group_all_keys(&state.redis, &state.db, id).await;
     Ok(Json(group))
 }
 
@@ -330,7 +338,7 @@ async fn bulk_activate(
     .map_err(internal)?;
 
     for g in &groups {
-        crate::cache::invalidate_group_config(&state.redis, &g.api_key).await;
+        crate::cache::invalidate_group_all_keys(&state.redis, &state.db, g.id).await;
     }
     Ok(StatusCode::OK)
 }
@@ -348,7 +356,7 @@ async fn bulk_deactivate(
     .map_err(internal)?;
 
     for g in &groups {
-        crate::cache::invalidate_group_config(&state.redis, &g.api_key).await;
+        crate::cache::invalidate_group_all_keys(&state.redis, &state.db, g.id).await;
     }
     Ok(StatusCode::OK)
 }
@@ -365,15 +373,17 @@ async fn bulk_delete(
     .await
     .map_err(internal)?;
 
+    // Invalidate before delete
+    for g in &groups {
+        crate::cache::invalidate_group_all_keys(&state.redis, &state.db, g.id).await;
+    }
+
     sqlx::query("DELETE FROM groups WHERE id = ANY($1)")
         .bind(&input.ids)
         .execute(&state.db)
         .await
         .map_err(internal)?;
 
-    for g in &groups {
-        crate::cache::invalidate_group_config(&state.redis, &g.api_key).await;
-    }
     Ok(StatusCode::OK)
 }
 
@@ -399,16 +409,8 @@ async fn bulk_assign_server(
     }
 
     // Invalidate cache for all affected groups
-    let groups = sqlx::query_as::<_, Group>(
-        "SELECT * FROM groups WHERE id = ANY($1)",
-    )
-    .bind(&input.group_ids)
-    .fetch_all(&state.db)
-    .await
-    .map_err(internal)?;
-
-    for g in &groups {
-        crate::cache::invalidate_group_config(&state.redis, &g.api_key).await;
+    for group_id in &input.group_ids {
+        crate::cache::invalidate_group_all_keys(&state.redis, &state.db, *group_id).await;
     }
     Ok(StatusCode::OK)
 }

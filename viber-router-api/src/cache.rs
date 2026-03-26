@@ -27,13 +27,44 @@ pub async fn invalidate_group_config(redis: &Pool, api_key: &str) {
     }
 }
 
+/// Invalidate cache for a group's master key AND all its sub-keys.
+pub async fn invalidate_group_all_keys(redis: &Pool, db: &PgPool, group_id: Uuid) {
+    // Get master key
+    let master: Option<(String,)> = sqlx::query_as(
+        "SELECT api_key FROM groups WHERE id = $1",
+    )
+    .bind(group_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some((master_key,)) = master {
+        invalidate_group_config(redis, &master_key).await;
+    }
+
+    // Get all sub-keys
+    let sub_keys: Vec<(String,)> = sqlx::query_as(
+        "SELECT api_key FROM group_keys WHERE group_id = $1",
+    )
+    .bind(group_id)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+
+    for (api_key,) in sub_keys {
+        invalidate_group_config(redis, &api_key).await;
+    }
+}
+
 pub async fn invalidate_groups_by_server(redis: &Pool, db: &PgPool, server_id: Uuid) {
-    let api_keys: Vec<(String,)> = sqlx::query_as(
-        "SELECT g.api_key FROM groups g \
+    // Get all group IDs affected by this server
+    let group_ids: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT g.id FROM groups g \
          JOIN group_servers gs ON g.id = gs.group_id \
          WHERE gs.server_id = $1 \
          UNION \
-         SELECT g.api_key FROM groups g \
+         SELECT g.id FROM groups g \
          WHERE g.count_tokens_server_id = $1",
     )
     .bind(server_id)
@@ -41,7 +72,7 @@ pub async fn invalidate_groups_by_server(redis: &Pool, db: &PgPool, server_id: U
     .await
     .unwrap_or_default();
 
-    for (api_key,) in api_keys {
-        invalidate_group_config(redis, &api_key).await;
+    for (gid,) in group_ids {
+        invalidate_group_all_keys(redis, db, gid).await;
     }
 }

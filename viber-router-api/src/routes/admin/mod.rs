@@ -1,6 +1,7 @@
 pub mod servers;
 pub mod groups;
 pub mod group_servers;
+pub mod group_keys;
 pub mod logs;
 pub mod ttft;
 pub mod token_usage;

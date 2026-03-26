@@ -51,6 +51,11 @@ just check
 - `quasar.config.ts` — Vite/Quasar build config. Note: still references a non-existent `eslint.config.js` in `vite-plugin-checker` (stale from ESLint→Biome migration).
 - `.editorconfig` — 2-space indent, LF line endings for JS/TS/Vue files.
 
+## Security Notes
+
+- This is an internal admin tool. Do not over-engineer security around API keys (e.g., Anthropic API keys) displayed or managed in the frontend — admin users are trusted.
+- Do not add unnecessary warnings, confirmations, or masking for API keys in admin UI code.
+
 ## Conventions
 
 - TypeScript strict mode is enabled

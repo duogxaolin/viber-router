@@ -28,6 +28,7 @@ pub struct TokenUsageParams {
     pub end: Option<chrono::DateTime<chrono::Utc>>,
     pub is_dynamic_key: Option<bool>,
     pub key_hash: Option<String>,
+    pub group_key_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,6 +63,11 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/", get(get_token_usage))
 }
 
+enum GroupKeyIdFilter {
+    IsNull,
+    Equals(Uuid),
+}
+
 async fn get_token_usage(
     State(state): State<AppState>,
     Query(params): Query<TokenUsageParams>,
@@ -75,6 +81,16 @@ async fn get_token_usage(
     let key_hash = params.key_hash.map(|kh| {
         if kh.len() > 16 { hash_key(&kh) } else { kh }
     });
+
+    // group_key_id filter: "null" means master key (IS NULL), UUID means specific sub-key
+    let group_key_id_filter: Option<GroupKeyIdFilter> = match params.group_key_id {
+        None => None,
+        Some(ref v) if v == "null" => Some(GroupKeyIdFilter::IsNull),
+        Some(ref v) => {
+            let id = v.parse::<Uuid>().map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid group_key_id"))?;
+            Some(GroupKeyIdFilter::Equals(id))
+        }
+    };
 
     let servers = if let (Some(start), Some(end)) = (params.start, params.end) {
         let mut qb = String::from(
@@ -96,6 +112,16 @@ async fn get_token_usage(
             param_idx += 1;
             qb.push_str(&format!(" AND t.key_hash = ${param_idx}"));
         }
+        match &group_key_id_filter {
+            Some(GroupKeyIdFilter::IsNull) => {
+                qb.push_str(" AND t.group_key_id IS NULL");
+            }
+            Some(GroupKeyIdFilter::Equals(_)) => {
+                param_idx += 1;
+                qb.push_str(&format!(" AND t.group_key_id = ${param_idx}"));
+            }
+            None => {}
+        }
         qb.push_str(
             " GROUP BY t.server_id, s.name, t.model ORDER BY s.name, t.model",
         );
@@ -109,6 +135,9 @@ async fn get_token_usage(
         }
         if let Some(ref kh) = key_hash {
             query = query.bind(kh);
+        }
+        if let Some(GroupKeyIdFilter::Equals(id)) = &group_key_id_filter {
+            query = query.bind(id);
         }
         query.fetch_all(&state.db).await.map_err(internal)?
     } else {
@@ -133,6 +162,16 @@ async fn get_token_usage(
             param_idx += 1;
             qb.push_str(&format!(" AND t.key_hash = ${param_idx}"));
         }
+        match &group_key_id_filter {
+            Some(GroupKeyIdFilter::IsNull) => {
+                qb.push_str(" AND t.group_key_id IS NULL");
+            }
+            Some(GroupKeyIdFilter::Equals(_)) => {
+                param_idx += 1;
+                qb.push_str(&format!(" AND t.group_key_id = ${param_idx}"));
+            }
+            None => {}
+        }
         qb.push_str(
             " GROUP BY t.server_id, s.name, t.model ORDER BY s.name, t.model",
         );
@@ -144,6 +183,9 @@ async fn get_token_usage(
         }
         if let Some(ref kh) = key_hash {
             query = query.bind(kh);
+        }
+        if let Some(GroupKeyIdFilter::Equals(id)) = &group_key_id_filter {
+            query = query.bind(id);
         }
         query.fetch_all(&state.db).await.map_err(internal)?
     };

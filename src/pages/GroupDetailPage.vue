@@ -8,136 +8,195 @@
         <q-toggle v-model="group.is_active" label="Active" @update:model-value="saveGroup" />
       </div>
 
-      <q-card flat bordered>
-        <q-card-section>
-          <div class="text-subtitle1 q-mb-sm">Properties</div>
-          <q-input v-model="group.name" label="Name" outlined dense class="q-mb-sm" />
-          <q-input v-model="failoverCodesStr" label="Failover Status Codes (comma-separated)" outlined dense class="q-mb-sm" />
-          <q-input v-model="ttftTimeoutStr" label="TTFT Timeout (ms, empty = disabled)" outlined dense type="number" class="q-mb-sm" hint="Auto-switch to next server if first token takes longer" />
-          <q-btn color="primary" label="Save" @click="saveGroup" />
-        </q-card-section>
-      </q-card>
+      <q-tabs v-model="activeTab" dense align="left" class="text-primary" active-color="primary" indicator-color="primary">
+        <q-tab name="properties" label="Properties" />
+        <q-tab name="servers" label="Servers" />
+        <q-tab name="keys" label="Keys" />
+        <q-tab name="ttft" label="TTFT" />
+        <q-tab name="token-usage" label="Token Usage" />
+      </q-tabs>
+      <q-separator />
 
-      <q-card flat bordered>
-        <q-card-section>
-          <div class="text-subtitle1 q-mb-sm">Count Tokens Default Server</div>
-          <q-select
-            v-model="group.count_tokens_server_id"
-            :options="allServers"
-            label="Default server for /v1/messages/count_tokens"
-            outlined
-            dense
-            emit-value
-            map-options
-            clearable
-            class="q-mb-sm"
-            @update:model-value="saveGroup"
-          />
-          <div class="text-subtitle2 q-mb-xs q-mt-md">Count Tokens Model Mappings</div>
-          <div v-for="(entry, idx) in ctMappingEntries" :key="idx" class="row q-gutter-sm q-mb-sm">
-            <q-input v-model="entry.from" label="From model" outlined dense style="flex:1" />
-            <q-input v-model="entry.to" label="To model" outlined dense style="flex:1" />
-            <q-btn flat dense icon="close" @click="ctMappingEntries.splice(idx, 1)" />
-          </div>
-          <div class="row q-gutter-sm">
-            <q-btn flat dense icon="add" label="Add mapping" @click="ctMappingEntries.push({ from: '', to: '' })" />
-            <q-btn color="primary" label="Save Mappings" dense @click="saveCtMappings" />
-          </div>
-        </q-card-section>
-      </q-card>
+      <q-tab-panels v-model="activeTab" animated>
+        <!-- Properties Tab -->
+        <q-tab-panel name="properties" class="q-pa-none q-gutter-md">
+          <q-card flat bordered>
+            <q-card-section>
+              <div class="text-subtitle1 q-mb-sm">Properties</div>
+              <q-input v-model="group.name" label="Name" outlined dense class="q-mb-sm" />
+              <q-input v-model="failoverCodesStr" label="Failover Status Codes (comma-separated)" outlined dense class="q-mb-sm" />
+              <q-input v-model="ttftTimeoutStr" label="TTFT Timeout (ms, empty = disabled)" outlined dense type="number" class="q-mb-sm" hint="Auto-switch to next server if first token takes longer" />
+              <q-btn color="primary" label="Save" @click="saveGroup" />
+            </q-card-section>
+          </q-card>
 
-      <q-card flat bordered>
-        <q-card-section>
-          <div class="text-subtitle1 q-mb-sm">API Key</div>
-          <div class="row items-center q-gutter-sm">
-            <code class="text-body1">{{ group.api_key }}</code>
-            <q-btn flat dense icon="content_copy" @click="copyKey" />
-            <q-btn flat dense color="warning" label="Regenerate" @click="onRegenerate" />
-          </div>
-        </q-card-section>
-      </q-card>
+          <q-card flat bordered>
+            <q-card-section>
+              <div class="text-subtitle1 q-mb-sm">Count Tokens Default Server</div>
+              <q-select v-model="group.count_tokens_server_id" :options="allServers" label="Default server for /v1/messages/count_tokens" outlined dense emit-value map-options clearable class="q-mb-sm" @update:model-value="saveGroup" />
+              <div class="text-subtitle2 q-mb-xs q-mt-md">Count Tokens Model Mappings</div>
+              <div v-for="(entry, idx) in ctMappingEntries" :key="idx" class="row q-gutter-sm q-mb-sm">
+                <q-input v-model="entry.from" label="From model" outlined dense style="flex:1" />
+                <q-input v-model="entry.to" label="To model" outlined dense style="flex:1" />
+                <q-btn flat dense icon="close" @click="ctMappingEntries.splice(idx, 1)" />
+              </div>
+              <div class="row q-gutter-sm">
+                <q-btn flat dense icon="add" label="Add mapping" @click="ctMappingEntries.push({ from: '', to: '' })" />
+                <q-btn color="primary" label="Save Mappings" dense @click="saveCtMappings" />
+              </div>
+            </q-card-section>
+          </q-card>
 
-      <q-card flat bordered>
-        <q-card-section>
-          <div class="row items-center q-mb-sm">
-            <div class="text-subtitle1">Key Builder</div>
-            <q-space />
-            <q-toggle v-model="showAllKeyBuilderServers" label="Show all servers" dense />
-          </div>
-          <div v-for="entry in visibleKeyBuilderEntries" :key="entry.server_id" class="row items-center q-gutter-sm q-mb-sm">
-            <span class="text-body2" style="min-width: 160px">{{ entry.server_name }} (#{{ entry.short_id }})</span>
-            <q-input v-model="entry.key" :placeholder="entry.defaultKey || 'API Key'" outlined dense style="flex: 1" />
-          </div>
-          <div v-if="visibleKeyBuilderEntries.length === 0" class="text-grey q-mb-sm">No servers without predefined key</div>
-          <div v-if="builtKey" class="q-mt-sm">
-            <div class="text-caption q-mb-xs">Dynamic Key</div>
-            <div class="row items-center q-gutter-sm">
-              <code class="text-body2" style="word-break: break-all">{{ builtKey }}</code>
-              <q-btn flat dense icon="content_copy" @click="copyText(builtKey)" />
-            </div>
-          </div>
-        </q-card-section>
-      </q-card>
+          <q-card flat bordered>
+            <q-card-section>
+              <div class="text-subtitle1 q-mb-sm">API Key</div>
+              <div class="row items-center q-gutter-sm">
+                <code class="text-body1">{{ group.api_key }}</code>
+                <q-btn flat dense icon="content_copy" @click="copyKey" />
+                <q-btn flat dense color="warning" label="Regenerate" @click="onRegenerate" />
+              </div>
+            </q-card-section>
+          </q-card>
 
-      <q-card flat bordered>
-        <q-card-section>
-          <div class="row items-center q-mb-sm">
-            <div class="text-subtitle1">Servers (priority order)</div>
-            <q-space />
-            <q-btn flat dense icon="add" label="Add Server" @click="showAddServer = true" />
-          </div>
-          <q-list bordered separator>
-            <q-item v-for="(s, idx) in servers" :key="s.server_id" :class="{ 'disabled-server': !s.is_enabled }">
-              <q-item-section avatar>
-                <div class="column items-center">
-                  <q-btn flat dense icon="arrow_upward" :disable="idx === 0" @click="moveServer(idx, -1)" />
-                  <span class="text-caption">{{ s.priority }}</span>
-                  <q-btn flat dense icon="arrow_downward" :disable="idx === servers.length - 1" @click="moveServer(idx, 1)" />
+          <q-card flat bordered>
+            <q-card-section>
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle1">Key Builder</div>
+                <q-space />
+                <q-toggle v-model="showAllKeyBuilderServers" label="Show all servers" dense />
+              </div>
+              <div v-for="entry in visibleKeyBuilderEntries" :key="entry.server_id" class="row items-center q-gutter-sm q-mb-sm">
+                <span class="text-body2" style="min-width: 160px">{{ entry.server_name }} (#{{ entry.short_id }})</span>
+                <q-input v-model="entry.key" :placeholder="entry.defaultKey || 'API Key'" outlined dense style="flex: 1" />
+              </div>
+              <div v-if="visibleKeyBuilderEntries.length === 0" class="text-grey q-mb-sm">No servers without predefined key</div>
+              <div v-if="builtKey" class="q-mt-sm">
+                <div class="text-caption q-mb-xs">Dynamic Key</div>
+                <div class="row items-center q-gutter-sm">
+                  <code class="text-body2" style="word-break: break-all">{{ builtKey }}</code>
+                  <q-btn flat dense icon="content_copy" @click="copyText(builtKey)" />
                 </div>
-              </q-item-section>
-              <q-item-section>
-                <q-item-label :class="{ 'text-strike': !s.is_enabled }">
-                  {{ s.server_name }}
-                  <q-badge outline class="q-ml-sm">
-                    #{{ s.short_id }}
-                    <q-btn flat dense size="xs" icon="content_copy" class="q-ml-xs" @click.stop="copyShortId(s.short_id)" />
-                  </q-badge>
-                  <q-badge
-                    v-if="getCircuitStatus(s.server_id)?.is_open"
-                    color="negative"
-                    class="q-ml-sm"
-                  >
-                    Circuit Open ({{ formatCircuitRemaining(getCircuitStatus(s.server_id)?.remaining_seconds ?? 0) }})
-                  </q-badge>
-                </q-item-label>
-                <q-item-label caption>{{ s.base_url }}</q-item-label>
-              </q-item-section>
-              <q-item-section side>
-                <div class="row q-gutter-xs items-center">
-                  <q-toggle v-model="s.is_enabled" dense :aria-label="`${s.server_name} enabled`" @update:model-value="toggleServerEnabled(s)" />
-                  <q-btn flat dense icon="edit" @click="openEditServer(s)" />
-                  <q-btn flat dense icon="tune" @click="editMappings(s)" />
-                  <q-btn flat dense icon="delete" color="negative" @click="onRemoveServer(s)" />
-                </div>
-              </q-item-section>
-            </q-item>
-            <q-item v-if="servers.length === 0">
-              <q-item-section class="text-grey">No servers assigned</q-item-section>
-            </q-item>
-          </q-list>
-        </q-card-section>
-      </q-card>
+              </div>
+            </q-card-section>
+          </q-card>
+        </q-tab-panel>
 
-      <q-card flat bordered>
-        <q-card-section>
-          <div class="row items-center q-mb-sm">
-            <q-btn flat dense round icon="chevron_left" :disable="ttftBlockOffset >= ttftMaxOffset" @click="ttftBlockOffset++" />
-            <div class="text-subtitle1 q-mx-sm">TTFT — {{ ttftBlockLabel }}</div>
-            <q-btn flat dense round icon="chevron_right" :disable="ttftBlockOffset <= 0" @click="ttftBlockOffset--" />
-            <q-space />
-            <q-btn-toggle
-              v-model="ttftWindowHours"
-              flat dense no-caps
+
+        <!-- Servers Tab -->
+        <q-tab-panel name="servers" class="q-pa-none">
+          <q-card flat bordered>
+            <q-card-section>
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle1">Servers (priority order)</div>
+                <q-space />
+                <q-btn flat dense icon="add" label="Add Server" @click="showAddServer = true" />
+              </div>
+              <q-list bordered separator>
+                <q-item v-for="(s, idx) in servers" :key="s.server_id" :class="{ 'disabled-server': !s.is_enabled }">
+                  <q-item-section avatar>
+                    <div class="column items-center">
+                      <q-btn flat dense icon="arrow_upward" :disable="idx === 0" @click="moveServer(idx, -1)" />
+                      <span class="text-caption">{{ s.priority }}</span>
+                      <q-btn flat dense icon="arrow_downward" :disable="idx === servers.length - 1" @click="moveServer(idx, 1)" />
+                    </div>
+                  </q-item-section>
+                  <q-item-section>
+                    <q-item-label :class="{ 'text-strike': !s.is_enabled }">
+                      {{ s.server_name }}
+                      <q-badge outline class="q-ml-sm">
+                        #{{ s.short_id }}
+                        <q-btn flat dense size="xs" icon="content_copy" class="q-ml-xs" @click.stop="copyShortId(s.short_id)" />
+                      </q-badge>
+                      <q-badge v-if="getCircuitStatus(s.server_id)?.is_open" color="negative" class="q-ml-sm">
+                        Circuit Open ({{ formatCircuitRemaining(getCircuitStatus(s.server_id)?.remaining_seconds ?? 0) }})
+                      </q-badge>
+                    </q-item-label>
+                    <q-item-label caption>{{ s.base_url }}</q-item-label>
+                  </q-item-section>
+                  <q-item-section side>
+                    <div class="row q-gutter-xs items-center">
+                      <q-toggle v-model="s.is_enabled" dense :aria-label="`${s.server_name} enabled`" @update:model-value="toggleServerEnabled(s)" />
+                      <q-btn flat dense icon="edit" @click="openEditServer(s)" />
+                      <q-btn flat dense icon="tune" @click="editMappings(s)" />
+                      <q-btn flat dense icon="delete" color="negative" @click="onRemoveServer(s)" />
+                    </div>
+                  </q-item-section>
+                </q-item>
+                <q-item v-if="servers.length === 0">
+                  <q-item-section class="text-grey">No servers assigned</q-item-section>
+                </q-item>
+              </q-list>
+            </q-card-section>
+          </q-card>
+        </q-tab-panel>
+
+
+        <!-- Keys Tab -->
+        <q-tab-panel name="keys" class="q-pa-none">
+          <q-card flat bordered>
+            <q-card-section>
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle1">Sub-Keys</div>
+                <q-space />
+                <q-input v-model="subKeySearch" placeholder="Search by name or key" outlined dense clearable style="max-width: 250px" class="q-mr-sm" @update:model-value="loadSubKeys" />
+                <q-btn color="primary" dense label="Create Key" @click="showCreateKey = true" />
+              </div>
+              <div v-if="subKeysLoading && !subKeys.length" class="flex flex-center q-pa-lg"><q-spinner size="md" /></div>
+              <q-banner v-else-if="subKeyError" class="bg-negative text-white q-mb-sm" rounded>
+                {{ subKeyError }}
+                <template #action>
+                  <q-btn flat label="Retry" @click="loadSubKeys" />
+                </template>
+              </q-banner>
+              <q-table
+                v-else
+                flat bordered dense
+                :rows="subKeys"
+                :columns="subKeyColumns"
+                row-key="id"
+                :pagination="subKeyPagination"
+                @request="onSubKeyRequest"
+              >
+                <template #body="props">
+                  <q-tr :props="props" @click="props.expand = !props.expand" @keydown.enter="props.expand = !props.expand" tabindex="0" role="button" :aria-expanded="props.expand" class="cursor-pointer">
+                    <q-td key="name" :props="props">{{ props.row.name }}</q-td>
+                    <q-td key="api_key" :props="props">
+                      <code>{{ maskKey(props.row.api_key) }}</code>
+                      <q-btn flat dense size="xs" icon="content_copy" aria-label="Copy key" @click.stop="copyText(props.row.api_key)" />
+                    </q-td>
+                    <q-td key="is_active" :props="props">
+                      <q-toggle :model-value="props.row.is_active" dense :aria-label="`${props.row.name} active`" @update:model-value="toggleSubKey(props.row, $event)" @click.stop />
+                    </q-td>
+                    <q-td key="actions" :props="props">
+                      <q-btn flat dense size="sm" label="Regenerate" @click.stop="onRegenerateSubKey(props.row)" />
+                    </q-td>
+                  </q-tr>
+                  <q-tr v-if="props.expand" :props="props">
+                    <q-td colspan="4">
+                      <SubKeyUsage :group-id="group?.id ?? ''" :group-key-id="props.row.id" />
+                    </q-td>
+                  </q-tr>
+                </template>
+                <template #no-data>
+                  <div class="text-grey text-center q-pa-md">No sub-keys created. Click "Create Key" to add one.</div>
+                </template>
+              </q-table>
+            </q-card-section>
+          </q-card>
+        </q-tab-panel>
+
+        <!-- TTFT Tab -->
+        <q-tab-panel name="ttft" class="q-pa-none">
+          <q-card flat bordered>
+            <q-card-section>
+              <div class="row items-center q-mb-sm">
+                <q-btn flat dense round icon="chevron_left" :disable="ttftBlockOffset >= ttftMaxOffset" @click="ttftBlockOffset++" />
+                <div class="text-subtitle1 q-mx-sm">TTFT — {{ ttftBlockLabel }}</div>
+                <q-btn flat dense round icon="chevron_right" :disable="ttftBlockOffset <= 0" @click="ttftBlockOffset--" />
+                <q-space />
+                <q-btn-toggle
+                  v-model="ttftWindowHours"
+                  flat dense no-caps
               toggle-color="primary"
               :options="[
                 { label: '1h', value: 1 },
@@ -184,11 +243,14 @@
               </tbody>
             </q-markup-table>
           </div>
-        </q-card-section>
-      </q-card>
+            </q-card-section>
+          </q-card>
+        </q-tab-panel>
 
-      <q-card flat bordered>
-        <q-card-section>
+        <!-- Token Usage Tab -->
+        <q-tab-panel name="token-usage" class="q-pa-none">
+          <q-card flat bordered>
+            <q-card-section>
           <div class="row items-center q-mb-sm">
             <div class="text-subtitle1">Token Usage</div>
             <q-space />
@@ -239,8 +301,10 @@
             :pagination="{ rowsPerPage: 0 }"
             hide-pagination
           />
-        </q-card-section>
-      </q-card>
+            </q-card-section>
+          </q-card>
+        </q-tab-panel>
+      </q-tab-panels>
 
       <q-dialog v-model="showAddServer" @hide="resetAddForm">
         <q-card style="width: 400px">
@@ -338,6 +402,19 @@
           </q-card-actions>
         </q-card>
       </q-dialog>
+
+      <q-dialog v-model="showCreateKey" @hide="newKeyName = ''">
+        <q-card style="width: 400px">
+          <q-card-section><div class="text-h6">Create Sub-Key</div></q-card-section>
+          <q-card-section>
+            <q-input v-model="newKeyName" label="Name" outlined maxlength="100" />
+          </q-card-section>
+          <q-card-actions align="right">
+            <q-btn flat label="Cancel" v-close-popup />
+            <q-btn color="primary" label="Create" :loading="creatingKey" @click="onCreateKey" />
+          </q-card-actions>
+        </q-card>
+      </q-dialog>
     </div>
     <div v-else class="flex flex-center" style="min-height: 200px">
       <q-spinner size="lg" />
@@ -349,7 +426,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useQuasar, copyToClipboard } from 'quasar';
-import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type TtftStatsResponse, type CircuitStatus, type TokenUsageStats } from 'stores/groups';
+import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type TtftStatsResponse, type CircuitStatus, type TokenUsageStats, type GroupKey } from 'stores/groups';
 import { useServersStore } from 'stores/servers';
 import { Scatter } from 'vue-chartjs';
 import {
@@ -364,6 +441,7 @@ import {
   TimeScale,
 } from 'chart.js';
 import 'chartjs-adapter-date-fns';
+import SubKeyUsage from 'components/SubKeyUsage.vue';
 
 import type { TooltipItem } from 'chart.js';
 
@@ -379,6 +457,7 @@ const serversStore = useServersStore();
 const group = ref<GroupWithServers | null>(null);
 const servers = ref<GroupServerDetail[]>([]);
 const failoverCodesStr = ref('');
+const activeTab = ref('properties');
 
 const CREATE_NEW = '__create_new__';
 const showAddServer = ref(false);
@@ -426,6 +505,23 @@ const tokenUsagePeriod = ref('24h');
 const tokenUsageServerFilter = ref<string | null>(null);
 const tokenUsageDynamicKeyFilter = ref(false);
 const tokenUsageKeyHashFilter = ref('');
+
+// Sub-keys state
+const subKeys = ref<GroupKey[]>([]);
+const subKeysLoading = ref(false);
+const subKeySearch = ref('');
+const subKeyError = ref('');
+const subKeyPagination = ref({ page: 1, rowsPerPage: 50, rowsNumber: 0, sortBy: '', descending: false });
+const showCreateKey = ref(false);
+const newKeyName = ref('');
+const creatingKey = ref(false);
+
+const subKeyColumns = [
+  { name: 'name', label: 'Name', field: 'name', align: 'left' as const },
+  { name: 'api_key', label: 'Key', field: 'api_key', align: 'left' as const },
+  { name: 'is_active', label: 'Status', field: 'is_active', align: 'center' as const },
+  { name: 'actions', label: 'Actions', field: 'id', align: 'right' as const },
+];
 
 const tokenUsageServerOptions = computed(() =>
   servers.value.map((s) => ({ label: s.server_name, value: s.server_id })),
@@ -586,6 +682,86 @@ async function loadTokenUsage() {
 watch(tokenUsagePeriod, () => loadTokenUsage());
 watch(tokenUsageDynamicKeyFilter, () => loadTokenUsage());
 watch(tokenUsageKeyHashFilter, () => loadTokenUsage());
+
+// Sub-key methods
+function maskKey(key: string) {
+  if (key.length <= 16) return key;
+  return `${key.slice(0, 14)}...${key.slice(-4)}`;
+}
+
+async function loadSubKeys() {
+  if (!group.value) return;
+  subKeysLoading.value = true;
+  subKeyError.value = '';
+  try {
+    const params: { page?: number; limit?: number; search?: string } = {
+      page: subKeyPagination.value.page,
+      limit: subKeyPagination.value.rowsPerPage,
+    };
+    if (subKeySearch.value) params.search = subKeySearch.value;
+    const result = await groupsStore.fetchGroupKeys(group.value.id, params);
+    subKeys.value = result.data;
+    subKeyPagination.value.rowsNumber = result.total;
+  } catch {
+    subKeyError.value = 'Failed to load sub-keys';
+  } finally {
+    subKeysLoading.value = false;
+  }
+}
+
+function onSubKeyRequest(props: { pagination: { page: number; rowsPerPage: number } }) {
+  subKeyPagination.value.page = props.pagination.page;
+  subKeyPagination.value.rowsPerPage = props.pagination.rowsPerPage;
+  loadSubKeys();
+}
+
+async function onCreateKey() {
+  if (!group.value || !newKeyName.value.trim()) return;
+  creatingKey.value = true;
+  try {
+    await groupsStore.createGroupKey(group.value.id, newKeyName.value.trim());
+    showCreateKey.value = false;
+    newKeyName.value = '';
+    loadSubKeys();
+    $q.notify({ type: 'positive', message: 'Key created' });
+  } catch (e: unknown) {
+    const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to create key';
+    $q.notify({ type: 'negative', message: msg });
+  } finally {
+    creatingKey.value = false;
+  }
+}
+
+async function toggleSubKey(row: GroupKey, val: boolean) {
+  if (!group.value) return;
+  try {
+    const updated = await groupsStore.updateGroupKey(group.value.id, row.id, { is_active: val });
+    Object.assign(row, updated);
+  } catch {
+    $q.notify({ type: 'negative', message: 'Failed to update key status' });
+  }
+}
+
+async function onRegenerateSubKey(row: GroupKey) {
+  if (!group.value) return;
+  $q.dialog({ title: 'Regenerate Key', message: `Regenerate key "${row.name}"? The old key will stop working.`, cancel: true })
+    .onOk(async () => {
+      if (!group.value) return;
+      try {
+        const updated = await groupsStore.regenerateGroupKey(group.value.id, row.id);
+        Object.assign(row, updated);
+        $q.notify({ type: 'positive', message: 'Key regenerated' });
+      } catch {
+        $q.notify({ type: 'negative', message: 'Failed to regenerate key' });
+      }
+    });
+}
+
+watch(activeTab, (tab) => {
+  if (tab === 'keys' && subKeys.value.length === 0) loadSubKeys();
+  if (tab === 'ttft') loadTtftStats();
+  if (tab === 'token-usage') loadTokenUsage();
+});
 
 function onCbFieldClear(field: 'cb_max_failures' | 'cb_window_seconds' | 'cb_cooldown_seconds') {
   if (editServerCbForm.value[field] === null || editServerCbForm.value[field] === undefined) {

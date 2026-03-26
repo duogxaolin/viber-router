@@ -193,13 +193,5 @@ async fn reorder_priorities(
 }
 
 async fn invalidate_group_cache(state: &AppState, group_id: Uuid) {
-    if let Ok(Some(group)) = sqlx::query_as::<_, crate::models::Group>(
-        "SELECT * FROM groups WHERE id = $1",
-    )
-    .bind(group_id)
-    .fetch_optional(&state.db)
-    .await
-    {
-        crate::cache::invalidate_group_config(&state.redis, &group.api_key).await;
-    }
+    crate::cache::invalidate_group_all_keys(&state.redis, &state.db, group_id).await;
 }

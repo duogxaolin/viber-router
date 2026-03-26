@@ -74,4 +74,5 @@ pub struct GroupConfig {
     pub ttft_timeout_ms: Option<i32>,
     pub servers: Vec<GroupServerDetail>,
     pub count_tokens_server: Option<CountTokensServer>,
+    pub group_key_id: Option<Uuid>,
 }

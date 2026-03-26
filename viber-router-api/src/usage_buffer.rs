@@ -15,6 +15,7 @@ pub struct TokenUsageEntry {
     pub cache_read_tokens: Option<i32>,
     pub is_dynamic_key: bool,
     pub key_hash: Option<String>,
+    pub group_key_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -75,6 +76,7 @@ async fn flush_batch(pool: &PgPool, entries: &[TokenUsageEntry]) {
     let mut cache_read_vec: Vec<Option<i32>> = Vec::with_capacity(len);
     let mut is_dynamic_keys = Vec::with_capacity(len);
     let mut key_hashes: Vec<Option<String>> = Vec::with_capacity(len);
+    let mut group_key_ids: Vec<Option<Uuid>> = Vec::with_capacity(len);
 
     for e in entries {
         ids.push(Uuid::new_v4());
@@ -88,16 +90,17 @@ async fn flush_batch(pool: &PgPool, entries: &[TokenUsageEntry]) {
         cache_read_vec.push(e.cache_read_tokens);
         is_dynamic_keys.push(e.is_dynamic_key);
         key_hashes.push(e.key_hash.clone());
+        group_key_ids.push(e.group_key_id);
     }
 
     let result = sqlx::query(
         "INSERT INTO token_usage_logs \
          (id, created_at, group_id, server_id, model, input_tokens, output_tokens, \
-          cache_creation_tokens, cache_read_tokens, is_dynamic_key, key_hash) \
+          cache_creation_tokens, cache_read_tokens, is_dynamic_key, key_hash, group_key_id) \
          SELECT * FROM UNNEST(\
            $1::uuid[], $2::timestamptz[], $3::uuid[], $4::uuid[], \
            $5::text[], $6::integer[], $7::integer[], \
-           $8::integer[], $9::integer[], $10::boolean[], $11::text[])",
+           $8::integer[], $9::integer[], $10::boolean[], $11::text[], $12::uuid[])",
     )
     .bind(&ids)
     .bind(&created_ats)
@@ -110,6 +113,7 @@ async fn flush_batch(pool: &PgPool, entries: &[TokenUsageEntry]) {
     .bind(&cache_read_vec)
     .bind(&is_dynamic_keys)
     .bind(&key_hashes)
+    .bind(&group_key_ids)
     .execute(pool)
     .await;
 
@@ -134,6 +138,7 @@ mod tests {
             cache_read_tokens: None,
             is_dynamic_key: false,
             key_hash: None,
+            group_key_id: None,
             created_at: Utc::now(),
         }
     }

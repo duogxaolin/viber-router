@@ -82,6 +82,25 @@ export interface TokenUsageStats {
   servers: ServerTokenUsage[];
 }
 
+export interface GroupKey {
+  id: string;
+  group_id: string;
+  api_key: string;
+  name: string;
+  is_active: boolean;
+  monthly_token_limit: number | null;
+  monthly_request_limit: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PaginatedGroupKeys {
+  data: GroupKey[];
+  total: number;
+  page: number;
+  total_pages: number;
+}
+
 export const useGroupsStore = defineStore('groups', () => {
   const groups = ref<Group[]>([]);
   const total = ref(0);
@@ -193,7 +212,7 @@ export const useGroupsStore = defineStore('groups', () => {
 
   async function fetchTokenUsageStats(
     groupId: string,
-    params?: { start?: string; end?: string; period?: string; is_dynamic_key?: boolean; key_hash?: string },
+    params?: { start?: string; end?: string; period?: string; is_dynamic_key?: boolean; key_hash?: string; group_key_id?: string },
   ) {
     const qp: Record<string, string> = { group_id: groupId };
     if (params?.start) qp.start = params.start;
@@ -201,8 +220,40 @@ export const useGroupsStore = defineStore('groups', () => {
     if (params?.period) qp.period = params.period;
     if (params?.is_dynamic_key !== undefined) qp.is_dynamic_key = String(params.is_dynamic_key);
     if (params?.key_hash) qp.key_hash = params.key_hash;
+    if (params?.group_key_id) qp.group_key_id = params.group_key_id;
     const { data } = await api.get<TokenUsageStats>('/api/admin/token-usage', { params: qp });
     return data;
+  }
+
+  async function fetchGroupKeys(
+    groupId: string,
+    params?: { page?: number; limit?: number; search?: string },
+  ) {
+    const { data } = await api.get<PaginatedGroupKeys>(`/api/admin/groups/${groupId}/keys`, { params });
+    return data;
+  }
+
+  async function createGroupKey(groupId: string, name: string) {
+    const { data } = await api.post<GroupKey>(`/api/admin/groups/${groupId}/keys`, { name });
+    return data;
+  }
+
+  async function updateGroupKey(groupId: string, keyId: string, input: { name?: string; is_active?: boolean }) {
+    const { data } = await api.patch<GroupKey>(`/api/admin/groups/${groupId}/keys/${keyId}`, input);
+    return data;
+  }
+
+  async function regenerateGroupKey(groupId: string, keyId: string) {
+    const { data } = await api.post<GroupKey>(`/api/admin/groups/${groupId}/keys/${keyId}/regenerate`);
+    return data;
+  }
+
+  async function fetchKeyUsage(
+    groupId: string,
+    groupKeyId: string,
+    params?: { period?: string; start?: string; end?: string },
+  ) {
+    return fetchTokenUsageStats(groupId, { ...params, group_key_id: groupKeyId });
   }
 
   return {
@@ -211,5 +262,6 @@ export const useGroupsStore = defineStore('groups', () => {
     bulkActivate, bulkDeactivate, bulkDelete, bulkAssignServer,
     assignServer, updateAssignment, removeServer, reorderServers,
     fetchTtftStats, fetchCircuitStatus, fetchTokenUsageStats,
+    fetchGroupKeys, createGroupKey, updateGroupKey, regenerateGroupKey, fetchKeyUsage,
   };
 });

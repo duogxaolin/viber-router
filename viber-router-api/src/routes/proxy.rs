@@ -61,14 +61,56 @@ async fn resolve_group_config(state: &AppState, api_key: &str) -> Option<GroupCo
         return Some(config);
     }
 
-    // Fall back to DB
-    let group = sqlx::query_as::<_, crate::models::Group>(
+    // Try master key lookup first
+    let (group, group_key_id) = if let Some(group) = sqlx::query_as::<_, crate::models::Group>(
         "SELECT * FROM groups WHERE api_key = $1",
     )
     .bind(api_key)
     .fetch_optional(&state.db)
     .await
-    .ok()??;
+    .ok()?
+    {
+        (group, None)
+    } else {
+        // Fall back to sub-key lookup: JOIN group_keys → groups
+        let row = sqlx::query_as::<_, (uuid::Uuid, bool, uuid::Uuid)>(
+            "SELECT gk.group_id, gk.is_active, gk.id \
+             FROM group_keys gk WHERE gk.api_key = $1",
+        )
+        .bind(api_key)
+        .fetch_optional(&state.db)
+        .await
+        .ok()??;
+
+        let (group_id, sub_key_active, sub_key_id) = row;
+
+        // If sub-key is disabled, cache a disabled config so subsequent requests are fast
+        if !sub_key_active {
+            let config = GroupConfig {
+                group_id,
+                group_name: String::new(),
+                api_key: api_key.to_string(),
+                is_active: false,
+                failover_status_codes: vec![],
+                ttft_timeout_ms: None,
+                servers: vec![],
+                count_tokens_server: None,
+                group_key_id: Some(sub_key_id),
+            };
+            cache::set_group_config(&state.redis, api_key, &config).await;
+            return Some(config);
+        }
+
+        let group = sqlx::query_as::<_, crate::models::Group>(
+            "SELECT * FROM groups WHERE id = $1",
+        )
+        .bind(group_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()??;
+
+        (group, Some(sub_key_id))
+    };
 
     let servers = sqlx::query_as::<_, GroupServerDetail>(
         "SELECT gs.server_id, s.short_id, s.name as server_name, s.base_url, s.api_key, gs.priority, gs.model_mappings, gs.is_enabled, \
@@ -115,6 +157,7 @@ async fn resolve_group_config(state: &AppState, api_key: &str) -> Option<GroupCo
         ttft_timeout_ms: group.ttft_timeout_ms,
         servers,
         count_tokens_server,
+        group_key_id,
     };
 
     // Cache it for next time
@@ -222,11 +265,26 @@ async fn proxy_handler(
     let config = match resolve_group_config(&state, &parsed.group_key).await {
         Some(c) => c,
         None => {
-            return anthropic_error(
-                StatusCode::UNAUTHORIZED,
-                "authentication_error",
-                "Invalid API key",
-            );
+            // If dynamic keys were parsed but master key not found, the raw key might be
+            // a sub-key that contains `-rsv-` literally. Re-try with the entire raw key.
+            if !parsed.dynamic_keys.is_empty() {
+                match resolve_group_config(&state, &raw_key).await {
+                    Some(c) => c,
+                    None => {
+                        return anthropic_error(
+                            StatusCode::UNAUTHORIZED,
+                            "authentication_error",
+                            "Invalid API key",
+                        );
+                    }
+                }
+            } else {
+                return anthropic_error(
+                    StatusCode::UNAUTHORIZED,
+                    "authentication_error",
+                    "Invalid API key",
+                );
+            }
         }
     };
 
@@ -747,6 +805,7 @@ async fn proxy_handler(
                             cache_read_tokens: usage.get("cache_read_input_tokens").and_then(|v| v.as_i64()).map(|v| v as i32),
                             is_dynamic_key: is_dk,
                             key_hash: kh,
+                            group_key_id: config.group_key_id,
                             created_at: Utc::now(),
                         };
                         if state.usage_tx.try_send(entry).is_err() {
@@ -845,7 +904,7 @@ async fn proxy_handler(
                         };
                         Body::from_stream(wrap_stream_with_usage_tracking(
                             combined, state.clone(), config.group_id, server.server_id,
-                            request_model.clone(), is_dk, kh,
+                            request_model.clone(), is_dk, kh, config.group_key_id,
                         ))
                     } else {
                         Body::from_stream(combined)
@@ -925,7 +984,7 @@ async fn proxy_handler(
                         };
                         Body::from_stream(wrap_stream_with_usage_tracking(
                             combined, state.clone(), config.group_id, server.server_id,
-                            request_model.clone(), is_dk, kh,
+                            request_model.clone(), is_dk, kh, config.group_key_id,
                         ))
                     } else {
                         Body::from_stream(combined)
@@ -1024,6 +1083,7 @@ struct UsageTrackingStream<S> {
     model: Option<String>,
     is_dynamic_key: bool,
     key_hash: Option<String>,
+    group_key_id: Option<uuid::Uuid>,
     done: bool,
 }
 
@@ -1065,6 +1125,7 @@ where
                         cache_read_tokens: usage.cache_read_tokens,
                         is_dynamic_key: this.is_dynamic_key,
                         key_hash: this.key_hash.clone(),
+                        group_key_id: this.group_key_id,
                         created_at: Utc::now(),
                     };
                     if this.state.usage_tx.try_send(entry).is_err() {
@@ -1087,6 +1148,7 @@ fn wrap_stream_with_usage_tracking<S>(
     model: Option<String>,
     is_dynamic_key: bool,
     key_hash: Option<String>,
+    group_key_id: Option<uuid::Uuid>,
 ) -> UsageTrackingStream<S>
 where
     S: futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
@@ -1100,6 +1162,7 @@ where
         model,
         is_dynamic_key,
         key_hash,
+        group_key_id,
         done: false,
     }
 }
