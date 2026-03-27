@@ -185,7 +185,12 @@
                       <q-toggle :model-value="props.row.is_active" dense :aria-label="`${props.row.name} active`" @update:model-value="toggleSubKey(props.row, $event)" @click.stop />
                     </q-td>
                     <q-td key="actions" :props="props">
-                      <q-btn flat dense size="sm" label="Regenerate" @click.stop="onRegenerateSubKey(props.row)" />
+                      <q-btn flat dense round size="sm" icon="open_in_new" aria-label="Open usage page" :href="usageLink(props.row.api_key)" target="_blank" @click.stop>
+                        <q-tooltip>Usage page</q-tooltip>
+                      </q-btn>
+                      <q-btn flat dense round size="sm" icon="autorenew" aria-label="Regenerate key" @click.stop="onRegenerateSubKey(props.row)">
+                        <q-tooltip>Regenerate</q-tooltip>
+                      </q-btn>
                     </q-td>
                   </q-tr>
                   <q-tr v-if="props.expand" :props="props">
@@ -1034,6 +1039,10 @@ function copyShortId(shortId: number) {
   copyToClipboard(String(shortId)).then(() =>
     $q.notify({ message: 'Copied', type: 'positive' })
   );
+}
+
+function usageLink(apiKey: string) {
+  return `${window.location.origin}/#/usage/${encodeURIComponent(apiKey)}`;
 }
 
 async function onRegenerate() {

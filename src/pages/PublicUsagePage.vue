@@ -8,6 +8,15 @@
         </div>
         <q-space />
         <q-btn
+          v-if="routeKey"
+          flat dense
+          icon="open_in_new"
+          label="Share"
+          aria-label="Open usage page in new tab"
+          :href="usagePageUrl"
+          target="_blank"
+        />
+        <q-btn
           flat dense round
           :icon="isDark ? 'light_mode' : 'dark_mode'"
           :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
@@ -193,7 +202,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useQuasar, copyToClipboard } from 'quasar';
 import { api } from 'boot/axios';
@@ -299,6 +308,11 @@ function copyText(text: string) {
   );
 }
 
+const usagePageUrl = computed(() => {
+  if (!routeKey.value) return '';
+  return `${window.location.origin}/#/usage/${encodeURIComponent(routeKey.value)}`;
+});
+
 const sortedSubscriptions = computed(() => {
   if (!data.value) return [];
   return [...data.value.subscriptions].sort((a, b) => {
@@ -329,7 +343,7 @@ function formatDate(iso: string) {
 }
 
 function formatCountdown(iso: string) {
-  const diff = new Date(iso).getTime() - Date.now();
+  const diff = new Date(iso).getTime() - now.value;
   if (diff <= 0) return 'now';
   const hours = Math.floor(diff / 3600000);
   const minutes = Math.floor((diff % 3600000) / 60000);
@@ -418,22 +432,31 @@ const ttftChartOptions = computed(() => ({
   },
 }));
 
-async function fetchUsage(key: string) {
-  loading.value = true;
-  error.value = '';
-  data.value = null;
+async function fetchUsage(key: string, silent = false) {
+  if (!silent) {
+    loading.value = true;
+    error.value = '';
+    data.value = null;
+  }
   try {
     const res = await api.get<UsageData>('/api/public/usage', { params: { key } });
     data.value = res.data;
     fetchTtft(key);
   } catch (e: unknown) {
-    const status = (e as { response?: { status?: number } }).response?.status;
-    if (status === 403) error.value = 'Invalid or inactive key';
-    else if (status === 429) error.value = 'Too many requests. Please try again later.';
-    else error.value = 'An error occurred. Please try again.';
+    if (!silent) {
+      const status = (e as { response?: { status?: number } }).response?.status;
+      if (status === 403) error.value = 'Invalid or inactive key';
+      else if (status === 429) error.value = 'Too many requests. Please try again later.';
+      else error.value = 'An error occurred. Please try again.';
+    }
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
+}
+
+function refreshAll() {
+  const key = routeKey.value;
+  if (key && data.value) fetchUsage(key, true);
 }
 
 function submitKey() {
@@ -448,10 +471,6 @@ function goToForm() {
   router.push('/usage');
 }
 
-onMounted(() => {
-  if (routeKey.value) fetchUsage(routeKey.value);
-});
-
 // Watch for route param changes
 watch(routeKey, (key) => {
   if (key) fetchUsage(key);
@@ -462,7 +481,30 @@ watch(ttftPeriod, () => {
   const key = routeKey.value;
   if (key) fetchTtft(key);
 });
-</script>
+
+// Reactive clock for countdown display (ticks every 60s)
+const now = ref(Date.now());
+
+// Auto-refresh: 60s polling + tab re-activation
+let pollTimer: ReturnType<typeof setInterval> | undefined;
+let countdownTimer: ReturnType<typeof setInterval> | undefined;
+
+function onVisibilityChange() {
+  if (!document.hidden) refreshAll();
+}
+
+onMounted(() => {
+  if (routeKey.value) fetchUsage(routeKey.value);
+  pollTimer = setInterval(refreshAll, 60_000);
+  countdownTimer = setInterval(() => { now.value = Date.now(); }, 60_000);
+  document.addEventListener('visibilitychange', onVisibilityChange);
+});
+
+onUnmounted(() => {
+  clearInterval(pollTimer);
+  clearInterval(countdownTimer);
+  document.removeEventListener('visibilitychange', onVisibilityChange);
+});</script>
 
 <style scoped lang="scss">
 .public-usage-page {
