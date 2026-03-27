@@ -1,3 +1,5 @@
+## ADDED Requirements
+
 ### Requirement: Key subscriptions table
 The system SHALL store subscription instances in a `key_subscriptions` table with columns: `id` (UUID PK), `group_key_id` (UUID FK to group_keys ON DELETE CASCADE), `plan_id` (UUID FK to subscription_plans, nullable), `sub_type` (TEXT NOT NULL), `cost_limit_usd` (FLOAT8 NOT NULL), `model_limits` (JSONB DEFAULT '{}'), `reset_hours` (INT, nullable), `duration_days` (INT NOT NULL), `status` (TEXT NOT NULL DEFAULT 'active'), `activated_at` (TIMESTAMPTZ, nullable), `expires_at` (TIMESTAMPTZ, nullable), `created_at` (TIMESTAMPTZ). Index on `(group_key_id, status)`.
 
@@ -21,23 +23,11 @@ The system SHALL allow assigning a plan to a sub-key via POST `/api/admin/groups
 - **THEN** the system SHALL return 404
 
 ### Requirement: List subscriptions for a sub-key
-The system SHALL return paginated subscriptions for a sub-key via GET `/api/admin/groups/:group_id/keys/:key_id/subscriptions` with optional query parameters `page` (default 1) and `limit` (default 10, max 100). The response SHALL be a JSON object with fields `data` (array of subscriptions with `cost_used`), `total` (total count), `page` (current page), and `total_pages` (computed ceiling of total/limit).
+The system SHALL return all subscriptions for a sub-key via GET `/api/admin/groups/:group_id/keys/:key_id/subscriptions`.
 
-#### Scenario: List subscriptions with default pagination
-- **WHEN** an admin sends GET for a sub-key's subscriptions without query parameters
-- **THEN** the system SHALL return the first 10 subscriptions ordered by `created_at` descending, wrapped in `{ data, total, page: 1, total_pages }`
-
-#### Scenario: List subscriptions with explicit page and limit
-- **WHEN** an admin sends GET with `?page=2&limit=5`
-- **THEN** the system SHALL return subscriptions 6-10 (offset 5) ordered by `created_at` descending, with correct `total` and `total_pages` values
-
-#### Scenario: Page beyond available data
-- **WHEN** an admin sends GET with a page number exceeding available pages
-- **THEN** the system SHALL return an empty `data` array with correct `total` and `total_pages`
-
-#### Scenario: Limit clamping
-- **WHEN** an admin sends GET with `limit=500`
-- **THEN** the system SHALL clamp the limit to 100
+#### Scenario: List subscriptions
+- **WHEN** an admin sends GET for a sub-key's subscriptions
+- **THEN** the system SHALL return all subscriptions ordered by `created_at` descending
 
 ### Requirement: Cancel subscription
 The system SHALL allow cancelling a subscription via PATCH `/api/admin/groups/:group_id/keys/:key_id/subscriptions/:sub_id` with `{ "status": "cancelled" }`. Only subscriptions with `status: "active"` can be cancelled.

@@ -1,80 +1,7 @@
-## ADDED Requirements
-
-### Requirement: Login page
-The admin UI SHALL present a login page that accepts the admin token. On successful login, the token SHALL be stored in localStorage and the user redirected to the dashboard.
-
-#### Scenario: Successful login
-- **WHEN** the user enters a valid admin token and clicks Login
-- **THEN** the token is stored in localStorage and the user is redirected to the Servers page
-
-#### Scenario: Invalid login
-- **WHEN** the user enters an invalid token and clicks Login
-- **THEN** an error message "Invalid admin token" is displayed inline
-
-#### Scenario: No token in storage
-- **WHEN** the user navigates to any admin page without a token in localStorage
-- **THEN** the user is redirected to the login page
-
-### Requirement: Servers management page
-The admin UI SHALL display a list of all servers with name, base_url, and api_key visible. The page SHALL support creating, editing, and deleting servers.
-
-#### Scenario: List servers
-- **WHEN** the user navigates to the Servers page
-- **THEN** a table displays all servers with columns: Name, Base URL, API Key, Actions (Edit, Delete)
-
-#### Scenario: Create server
-- **WHEN** the user clicks "Add Server" and fills in name, base_url, api_key, then clicks Save
-- **THEN** the server is created and appears in the table
-
-#### Scenario: Edit server
-- **WHEN** the user clicks Edit on a server row, modifies fields, and clicks Save
-- **THEN** the server is updated in the table
-
-#### Scenario: Delete server
-- **WHEN** the user clicks Delete on a server row and confirms the action
-- **THEN** the server is removed from the table
-
-#### Scenario: Delete server in use
-- **WHEN** the user clicks Delete on a server that is assigned to groups
-- **THEN** an error message is displayed listing the groups that reference this server
-
-### Requirement: Groups management page with server-side pagination
-The admin UI SHALL display a paginated table of groups with search, filter, and bulk operations. Pagination, search, and filtering SHALL be server-side.
-
-#### Scenario: Paginated group list
-- **WHEN** the user navigates to the Groups page
-- **THEN** a table displays groups with columns: Name, API Key (with copy button), Status (active/inactive), Servers count, Created At, and a checkbox for selection
-
-#### Scenario: Search groups
-- **WHEN** the user types in the search field
-- **THEN** the table filters to show groups whose name matches the search term (server-side)
-
-#### Scenario: Filter by active status
-- **WHEN** the user selects "Active" or "Inactive" from the status filter
-- **THEN** the table shows only groups matching that status
-
-#### Scenario: Filter by server
-- **WHEN** the user selects a server from the server filter dropdown
-- **THEN** the table shows only groups that have that server assigned
-
-#### Scenario: Bulk activate
-- **WHEN** the user selects multiple groups via checkboxes and clicks "Activate"
-- **THEN** all selected groups are set to active
-
-#### Scenario: Bulk deactivate
-- **WHEN** the user selects multiple groups via checkboxes and clicks "Deactivate"
-- **THEN** all selected groups are set to inactive
-
-#### Scenario: Bulk delete
-- **WHEN** the user selects multiple groups via checkboxes and clicks "Delete" and confirms
-- **THEN** all selected groups are deleted
-
-#### Scenario: Bulk assign server
-- **WHEN** the user selects multiple groups, clicks "Assign Server", selects a server and priority
-- **THEN** the selected server is added to all selected groups with the specified priority
+## MODIFIED Requirements
 
 ### Requirement: Group detail page
-The admin UI SHALL display a group's full configuration including its servers with priorities and model mappings. The page SHALL support editing group properties, managing server assignments, reordering priorities, and toggling server enabled status.
+The admin UI SHALL display a group's full configuration including its servers with priorities and model mappings. The page SHALL support editing group properties, managing server assignments, reordering priorities, and toggling server enabled status. **Each server in the list SHALL display a rate limit badge showing `{max_requests}/{rate_window_seconds}s` when rate limiting is configured. The Edit Server dialog SHALL include a Rate Limit section below the Circuit Breaker section with two number inputs: "Max Requests" and "Window (seconds)".**
 
 #### Scenario: View group detail
 - **WHEN** the user clicks on a group row in the groups table
@@ -120,13 +47,22 @@ The admin UI SHALL display a group's full configuration including its servers wi
 - **WHEN** a server in the group has `is_enabled: true`
 - **THEN** the server row SHALL appear at full opacity with normal text, and the toggle switch SHALL be in the ON position
 
-### Requirement: Navigation
-The admin UI SHALL have a left sidebar navigation with links to Servers and Groups pages. The current page SHALL be highlighted.
+#### Scenario: Rate limit badge displayed
+- **WHEN** a server has `max_requests=100` and `rate_window_seconds=60`
+- **THEN** the server row SHALL display a badge showing "100/60s"
 
-#### Scenario: Navigate between pages
-- **WHEN** the user clicks "Servers" or "Groups" in the sidebar
-- **THEN** the corresponding page is displayed and the sidebar link is highlighted
+#### Scenario: No rate limit badge when not configured
+- **WHEN** a server has `max_requests=NULL` and `rate_window_seconds=NULL`
+- **THEN** the server row SHALL NOT display a rate limit badge
 
-#### Scenario: Logout
-- **WHEN** the user clicks Logout
-- **THEN** the token is removed from localStorage and the user is redirected to the login page
+#### Scenario: Edit rate limit in Edit Server dialog
+- **WHEN** the user clicks Edit on a server and the Edit Server dialog opens
+- **THEN** the dialog SHALL include a "Rate Limit" section below the Circuit Breaker section with "Max Requests" and "Window (seconds)" number inputs, pre-filled with current values or empty if not configured
+
+#### Scenario: Save rate limit configuration
+- **WHEN** the user enters `max_requests=100` and `rate_window_seconds=60` in the Edit Server dialog and clicks Save
+- **THEN** the rate limit fields SHALL be saved via PUT API call and the server list SHALL reload
+
+#### Scenario: Clear rate limit configuration
+- **WHEN** the user clears both rate limit fields in the Edit Server dialog and clicks Save
+- **THEN** both fields SHALL be sent as null via PUT API call

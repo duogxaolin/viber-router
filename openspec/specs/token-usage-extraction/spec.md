@@ -1,54 +1,23 @@
-## ADDED Requirements
-
-### Requirement: Extract token usage from streaming SSE responses
-When the proxy forwards a streaming `/v1/messages` response with HTTP 200, the system SHALL extract token usage from SSE events without modifying the forwarded stream. The system SHALL read `input_tokens` from the `message_start` event and `output_tokens` from the `message_delta` event.
-
-#### Scenario: Successful streaming response with usage
-- **WHEN** the upstream returns a streaming HTTP 200 response for `/v1/messages` containing a `message_start` event with `usage.input_tokens: 100` and a `message_delta` event with `usage.output_tokens: 50`
-- **THEN** the system SHALL extract `input_tokens: 100` and `output_tokens: 50` and emit a usage log entry
-
-#### Scenario: Streaming response with cache tokens
-- **WHEN** the `message_start` event contains `usage.cache_creation_input_tokens: 20` and `usage.cache_read_input_tokens: 30`
-- **THEN** the system SHALL extract those values alongside `input_tokens` and `output_tokens`
-
-#### Scenario: Stream ends without message_delta (incomplete)
-- **WHEN** the stream terminates (client disconnect or upstream error) before a `message_delta` event is received
-- **THEN** the system SHALL NOT emit a usage log entry
-
-#### Scenario: SSE event spans multiple byte chunks
-- **WHEN** an SSE event is split across two or more byte chunks from the upstream
-- **THEN** the system SHALL buffer partial event data and parse the complete event once the `\n\n` delimiter is received
-
-#### Scenario: Stream forwarding is unaffected
-- **WHEN** the system extracts usage from SSE events
-- **THEN** every byte chunk SHALL be forwarded to the client unchanged and without additional latency
+## MODIFIED Requirements
 
 ### Requirement: Extract token usage from non-streaming responses
-When the proxy returns a non-streaming `/v1/messages` response with HTTP 200, the system SHALL parse the JSON response body to extract the top-level `usage` object.
+When the proxy receives a non-streaming `/v1/messages` HTTP 200 response, the system SHALL extract token usage and calculate cost using cached model pricing and server rate multipliers. The cost and selected subscription_id SHALL be included in the `TokenUsageEntry` sent to the usage buffer.
 
-#### Scenario: Successful non-streaming response with usage
-- **WHEN** the upstream returns a non-streaming HTTP 200 response for `/v1/messages` with `usage: { input_tokens: 100, output_tokens: 50 }`
-- **THEN** the system SHALL extract `input_tokens: 100` and `output_tokens: 50` and emit a usage log entry
+#### Scenario: Cost calculated with pricing available
+- **WHEN** the proxy extracts token usage and model pricing exists in the cache
+- **THEN** the `TokenUsageEntry` SHALL include `cost_usd` calculated as `(input_tokens × input_1m_usd × rate_input + output_tokens × output_1m_usd × rate_output + cache_creation_tokens × cache_write_1m_usd × rate_cache_write + cache_read_tokens × cache_read_1m_usd × rate_cache_read) / 1,000,000`
 
-#### Scenario: Non-streaming response with cache tokens
-- **WHEN** the response body contains `usage.cache_creation_input_tokens` and `usage.cache_read_input_tokens`
-- **THEN** the system SHALL extract those values alongside `input_tokens` and `output_tokens`
+#### Scenario: Cost not calculated without pricing
+- **WHEN** the proxy extracts token usage but model pricing is not found in the cache
+- **THEN** the `TokenUsageEntry` SHALL have `cost_usd: None` and `subscription_id: None`
 
-#### Scenario: Non-streaming response missing usage
-- **WHEN** the response body does not contain a `usage` object or is missing `input_tokens` or `output_tokens`
-- **THEN** the system SHALL NOT emit a usage log entry
+### Requirement: Extract token usage from streaming SSE responses
+When the proxy forwards a streaming `/v1/messages` response with HTTP 200, the system SHALL extract token usage from SSE events without modifying the forwarded stream. After the stream completes, the system SHALL calculate cost and update Redis subscription counters.
 
-### Requirement: Skip non-applicable requests
-The system SHALL only extract token usage for `/v1/messages` requests that return HTTP 200.
+#### Scenario: Streaming cost calculation
+- **WHEN** the streaming response completes and token usage has been extracted
+- **THEN** the system SHALL calculate cost using cached model pricing and server rates, update Redis counters for the charged subscription, and send a `TokenUsageEntry` with `cost_usd` and `subscription_id`
 
-#### Scenario: Non-200 response
-- **WHEN** the upstream returns a non-200 status code for `/v1/messages`
-- **THEN** the system SHALL NOT attempt to extract token usage
-
-#### Scenario: Count-tokens request
-- **WHEN** the request path is `/v1/messages/count_tokens`
-- **THEN** the system SHALL NOT attempt to extract token usage
-
-#### Scenario: Non-messages endpoint
-- **WHEN** the request path is not `/v1/messages`
-- **THEN** the system SHALL NOT attempt to extract token usage
+#### Scenario: Streaming subscription update
+- **WHEN** the streaming response completes and a subscription was selected pre-request
+- **THEN** the system SHALL INCRBYFLOAT the appropriate Redis cost counters (total and per-model) for that subscription
