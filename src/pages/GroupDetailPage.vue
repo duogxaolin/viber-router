@@ -238,17 +238,17 @@
                           </q-btn>
                           <span v-else class="text-caption text-grey q-ml-sm">No active plans available</span>
                         </div>
-                        <div v-if="!keySubscriptions[props.row.id] || (keySubscriptions[props.row.id] ?? []).length === 0" class="text-caption text-grey q-mb-sm">
+                        <div v-if="!keySubscriptions[props.row.id] || keySubscriptions[props.row.id]?.total === 0" class="text-caption text-grey q-mb-sm">
                           No subscriptions &mdash; unlimited usage
                         </div>
                         <q-table
                           v-else
                           flat bordered dense
-                          :rows="keySubscriptions[props.row.id] ?? []"
+                          :rows="keySubscriptions[props.row.id]?.data ?? []"
                           :columns="subColumns"
                           row-key="id"
-                          :pagination="{ rowsPerPage: 10 }"
-                          hide-pagination
+                          :pagination="subPagination[props.row.id]"
+                          @request="(p: { pagination: { page: number; rowsPerPage: number } }) => onSubPaginationRequest(props.row.id, p)"
                         >
                           <template #body-cell-status="sProps">
                             <q-td :props="sProps">
@@ -684,7 +684,8 @@ interface SubscriptionPlan {
   cost_limit_usd: number;
   is_active: boolean;
 }
-const keySubscriptions = ref<Record<string, KeySubscription[]>>({});
+const keySubscriptions = ref<Record<string, { data: KeySubscription[]; total: number }>>({});
+const subPagination = ref<Record<string, { page: number; rowsPerPage: number; rowsNumber: number }>>({});
 const activePlans = ref<SubscriptionPlan[]>([]);
 
 const subColumns = [
@@ -1304,12 +1305,20 @@ function onExpandSubKey(props: { expand: boolean; row: GroupKey }) {
   }
 }
 
-async function loadKeySubscriptions(keyId: string) {
+async function loadKeySubscriptions(keyId: string, page?: number, limit?: number) {
   if (!group.value) return;
+  const pg = subPagination.value[keyId] || { page: 1, rowsPerPage: 10, rowsNumber: 0 };
+  const p = page ?? pg.page;
+  const l = limit ?? pg.rowsPerPage;
   try {
-    const { data } = await api.get<KeySubscription[]>(`/api/admin/groups/${group.value.id}/keys/${keyId}/subscriptions`);
-    keySubscriptions.value[keyId] = data;
+    const { data } = await api.get<{ data: KeySubscription[]; total: number; page: number; total_pages: number }>(`/api/admin/groups/${group.value.id}/keys/${keyId}/subscriptions`, { params: { page: p, limit: l } });
+    keySubscriptions.value[keyId] = { data: data.data, total: data.total };
+    subPagination.value[keyId] = { page: data.page, rowsPerPage: l, rowsNumber: data.total };
   } catch { /* ignore */ }
+}
+
+function onSubPaginationRequest(keyId: string, req: { pagination: { page: number; rowsPerPage: number } }) {
+  loadKeySubscriptions(keyId, req.pagination.page, req.pagination.rowsPerPage);
 }
 
 async function loadActivePlans() {

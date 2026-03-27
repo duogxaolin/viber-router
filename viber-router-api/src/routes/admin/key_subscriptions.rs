@@ -1,13 +1,14 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::get,
 };
 use deadpool_redis::redis::AsyncCommands;
+use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::models::{AssignSubscription, CancelSubscription, KeySubscription, SubscriptionPlan};
+use crate::models::{AssignSubscription, CancelSubscription, KeySubscription, PaginatedResponse, SubscriptionPlan};
 use crate::routes::AppState;
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
@@ -17,6 +18,12 @@ struct KeySubscriptionWithUsage {
     #[serde(flatten)]
     sub: KeySubscription,
     cost_used: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListParams {
+    page: Option<i64>,
+    limit: Option<i64>,
 }
 
 fn err(status: StatusCode, msg: &str) -> ApiError {
@@ -77,22 +84,38 @@ async fn assign_subscription(
 async fn list_subscriptions(
     State(state): State<AppState>,
     Path((_group_id, key_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<Vec<KeySubscriptionWithUsage>>, ApiError> {
-    let subs = sqlx::query_as::<_, KeySubscription>(
-        "SELECT * FROM key_subscriptions WHERE group_key_id = $1 ORDER BY created_at DESC",
+    Query(params): Query<ListParams>,
+) -> Result<Json<PaginatedResponse<KeySubscriptionWithUsage>>, ApiError> {
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = params.limit.unwrap_or(10).clamp(1, 100);
+    let offset = (page - 1) * limit;
+
+    let (total,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM key_subscriptions WHERE group_key_id = $1",
     )
     .bind(key_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+
+    let subs = sqlx::query_as::<_, KeySubscription>(
+        "SELECT * FROM key_subscriptions WHERE group_key_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(key_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.db)
     .await
     .map_err(internal)?;
 
-    let mut result = Vec::with_capacity(subs.len());
+    let mut data = Vec::with_capacity(subs.len());
     for sub in subs {
         let cost_used = crate::subscription::get_total_cost(&state, &sub).await;
-        result.push(KeySubscriptionWithUsage { sub, cost_used });
+        data.push(KeySubscriptionWithUsage { sub, cost_used });
     }
 
-    Ok(Json(result))
+    let total_pages = (total as f64 / limit as f64).ceil() as i64;
+    Ok(Json(PaginatedResponse { data, total, page, total_pages }))
 }
 
 async fn cancel_subscription(
