@@ -8,15 +8,6 @@
         </div>
         <q-space />
         <q-btn
-          v-if="routeKey"
-          flat dense
-          icon="open_in_new"
-          label="Share"
-          aria-label="Open usage page in new tab"
-          :href="usagePageUrl"
-          target="_blank"
-        />
-        <q-btn
           flat dense round
           :icon="isDark ? 'light_mode' : 'dark_mode'"
           :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
@@ -307,11 +298,6 @@ function copyText(text: string) {
     $q.notify({ message: 'Copied', type: 'positive' })
   );
 }
-
-const usagePageUrl = computed(() => {
-  if (!routeKey.value) return '';
-  return `${window.location.origin}/#/usage/${encodeURIComponent(routeKey.value)}`;
-});
 
 const sortedSubscriptions = computed(() => {
   if (!data.value) return [];
