@@ -116,6 +116,16 @@
                       </q-badge>
                     </q-item-label>
                     <q-item-label caption>{{ s.base_url }}</q-item-label>
+                    <div v-if="uptimeData[s.server_id]?.length" class="q-mt-xs">
+                      <UptimeBars :buckets="uptimeData[s.server_id] ?? []" />
+                    </div>
+                    <div v-else-if="uptimeLoading" class="q-mt-xs">
+                      <q-skeleton type="rect" height="24px" />
+                    </div>
+                    <div v-else-if="uptimeError" class="q-mt-xs text-caption text-negative">
+                      {{ uptimeError }}
+                      <q-btn flat dense size="xs" label="Retry" class="q-ml-xs" @click.stop="loadUptime" />
+                    </div>
                   </q-item-section>
                   <q-item-section side>
                     <div class="row q-gutter-xs items-center">
@@ -595,6 +605,8 @@ import { useModelsStore } from 'stores/models';
 import { api } from 'boot/axios';
 import SubKeyUsage from 'components/SubKeyUsage.vue';
 import TtftChart from 'components/TtftChart.vue';
+import UptimeBars from 'components/UptimeBars.vue';
+import type { Bucket } from 'components/UptimeBars.vue';
 
 const $q = useQuasar();
 const route = useRoute();
@@ -714,6 +726,16 @@ function subStatusColor(status: string): string {
 
 // Rate modal state
 const showRateModal = ref(false);
+
+// Uptime state
+interface ServerUptime {
+  server_id: string;
+  server_name: string;
+  buckets: Bucket[];
+}
+const uptimeData = ref<Record<string, Bucket[]>>({});
+const uptimeLoading = ref(false);
+const uptimeError = ref('');
 const rateEditServer = ref<GroupServerDetail | null>(null);
 const savingRate = ref(false);
 const rateForm = ref({
@@ -810,6 +832,7 @@ onMounted(async () => {
   loadTtftKeys();
   loadCircuitStatus();
   loadTokenUsage();
+  loadUptime();
 });
 
 onUnmounted(() => {
@@ -872,6 +895,24 @@ function formatCircuitRemaining(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+async function loadUptime() {
+  if (!group.value) return;
+  uptimeLoading.value = true;
+  uptimeError.value = '';
+  try {
+    const { data: resp } = await api.get<{ servers: ServerUptime[] }>(`/api/admin/groups/${group.value.id}/uptime`);
+    const map: Record<string, Bucket[]> = {};
+    for (const s of resp.servers) {
+      map[s.server_id] = s.buckets;
+    }
+    uptimeData.value = map;
+  } catch {
+    uptimeError.value = 'Unable to load status';
+  } finally {
+    uptimeLoading.value = false;
+  }
 }
 
 async function loadTokenUsage() {

@@ -154,6 +154,30 @@
           hide-pagination
         />
 
+        <!-- Status -->
+        <div class="text-subtitle1 q-mb-sm">Status</div>
+        <q-card bordered flat class="q-mb-lg">
+          <q-card-section>
+            <div v-if="uptimeError" class="text-caption text-negative">
+              {{ uptimeError }}
+              <q-btn flat dense size="xs" label="Retry" class="q-ml-xs" @click="routeKey && fetchUptime(routeKey)" />
+            </div>
+            <template v-else-if="uptimeData">
+              <div class="row items-center q-mb-sm">
+                <q-badge
+                  :color="statusBadgeColor(uptimeData.status)"
+                  :label="statusBadgeLabel(uptimeData.status)"
+                  class="text-capitalize"
+                />
+              </div>
+              <UptimeBars :buckets="uptimeBuckets" />
+            </template>
+            <div v-else-if="uptimeLoading" class="flex flex-center q-pa-sm">
+              <q-spinner size="sm" />
+            </div>
+          </q-card-section>
+        </q-card>
+
         <!-- TTFT Section -->
         <div class="q-mt-lg">
           <div class="row items-center q-mb-sm">
@@ -242,6 +266,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { useQuasar, copyToClipboard } from 'quasar';
 import { api } from 'boot/axios';
 import QRCode from 'qrcode';
+import UptimeBars from 'components/UptimeBars.vue';
+import type { Bucket } from 'components/UptimeBars.vue';
 import { Scatter } from 'vue-chartjs';
 import {
   Chart as ChartJS,
@@ -388,6 +414,33 @@ function subStatusColor(status: string) {
   return 'grey';
 }
 
+function statusBadgeColor(status: string): string {
+  switch (status) {
+    case 'operational': return 'positive';
+    case 'degraded': return 'warning';
+    case 'down': return 'negative';
+    default: return 'grey';
+  }
+}
+
+function statusBadgeLabel(status: string): string {
+  switch (status) {
+    case 'operational': return 'Operational';
+    case 'degraded': return 'Degraded';
+    case 'down': return 'Down';
+    default: return 'No data';
+  }
+}
+
+const uptimeBuckets = computed<Bucket[]>(() => {
+  if (!uptimeData.value) return [];
+  return uptimeData.value.buckets.map((b) => ({
+    timestamp: b.timestamp,
+    total: b.total_requests,
+    success: b.successful_requests,
+  }));
+});
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString();
 }
@@ -406,6 +459,34 @@ const CHART_COLORS = ['#1976D2', '#26A69A', '#FF6F00', '#AB47BC', '#EF5350', '#6
 const ttftPeriod = ref('24h');
 const ttftLoading = ref(false);
 const ttftData = ref<TtftResponse | null>(null);
+
+// Uptime state
+interface UptimeBucketRaw {
+  timestamp: number;
+  total_requests: number;
+  successful_requests: number;
+}
+interface UptimeApiResponse {
+  status: string;
+  uptime_percent: number;
+  buckets: UptimeBucketRaw[];
+}
+const uptimeData = ref<UptimeApiResponse | null>(null);
+const uptimeLoading = ref(false);
+const uptimeError = ref('');
+
+async function fetchUptime(key: string) {
+  uptimeLoading.value = true;
+  uptimeError.value = '';
+  try {
+    const res = await api.get<UptimeApiResponse>('/api/public/uptime', { params: { key } });
+    uptimeData.value = res.data;
+  } catch {
+    uptimeError.value = 'Unable to load status';
+  } finally {
+    uptimeLoading.value = false;
+  }
+}
 
 async function fetchTtft(key: string) {
   ttftLoading.value = true;
@@ -492,6 +573,7 @@ async function fetchUsage(key: string, silent = false) {
     const res = await api.get<UsageData>('/api/public/usage', { params: { key } });
     data.value = res.data;
     fetchTtft(key);
+    fetchUptime(key);
   } catch (e: unknown) {
     if (!silent) {
       const status = (e as { response?: { status?: number } }).response?.status;
@@ -506,7 +588,10 @@ async function fetchUsage(key: string, silent = false) {
 
 function refreshAll() {
   const key = routeKey.value;
-  if (key && data.value) fetchUsage(key, true);
+  if (key && data.value) {
+    fetchUsage(key, true);
+    fetchUptime(key);
+  }
 }
 
 function submitKey() {

@@ -18,6 +18,7 @@ use crate::routes::AppState;
 use crate::routes::key_parser::parse_api_key;
 use crate::sse_usage_parser::SseUsageParser;
 use crate::ttft_buffer::TtftLogEntry;
+use crate::uptime_buffer::UptimeCheckEntry;
 use crate::telegram_notifier;
 use crate::usage_buffer::{TokenUsageEntry, hash_key};
 
@@ -357,6 +358,9 @@ async fn proxy_handler(
     let mut any_server_attempted = false;
     let mut any_rate_limited = false;
 
+    // Generate a unique request_id for uptime tracking across all server attempts
+    let request_id = uuid::Uuid::new_v4();
+
     // Extract request model before any transformation
     let request_model = extract_request_model(&body_bytes);
     let request_path = original_uri.path().to_string();
@@ -508,6 +512,8 @@ async fn proxy_handler(
                     last_server_id = ct_server.server_id;
                     last_server_name = ct_server.server_name.clone();
 
+                    emit_uptime_entry(&state, config.group_id, ct_server.server_id, status as i16, server_latency, request_id);
+
                     if status == 200 {
                         if failover_chain.len() > 1 {
                             emit_log_entry(
@@ -548,6 +554,8 @@ async fn proxy_handler(
                     });
                     last_server_id = ct_server.server_id;
                     last_server_name = ct_server.server_name.clone();
+
+                    emit_uptime_entry(&state, config.group_id, ct_server.server_id, 0, server_start.elapsed().as_millis() as i32, request_id);
                 }
             }
         }
@@ -668,6 +676,7 @@ async fn proxy_handler(
                 });
                 last_server_id = server.server_id;
                 last_server_name = server.server_name.clone();
+                emit_uptime_entry(&state, config.group_id, server.server_id, 0, server_start.elapsed().as_millis() as i32, request_id);
                 // Circuit breaker: record error on connection failure
                 if has_cb {
                     let tripped = circuit_breaker::record_error(
@@ -712,6 +721,8 @@ async fn proxy_handler(
                 error_body = %err_str,
                 "400 error from upstream"
             );
+            // Emit uptime for the 400 attempt
+            emit_uptime_entry(&state, config.group_id, server.server_id, status as i16, server_latency, request_id);
             if is_sig_err
                 && let Some(sanitized_body) = strip_thinking_blocks(&transformed_body)
             {
@@ -813,6 +824,7 @@ async fn proxy_handler(
 
         // Check if this is a failover status code
         if config.failover_status_codes.contains(&status) {
+            emit_uptime_entry(&state, config.group_id, server.server_id, status as i16, server_latency, request_id);
             // Circuit breaker: record error on failover status code
             if has_cb {
                 let tripped = circuit_breaker::record_error(
@@ -830,6 +842,7 @@ async fn proxy_handler(
 
         // Non-failover error
         if status != 200 {
+            emit_uptime_entry(&state, config.group_id, server.server_id, status as i16, server_latency, request_id);
 
             emit_log_entry(
                 &state, &config, &parsed.group_key,
@@ -864,6 +877,7 @@ async fn proxy_handler(
             .is_some_and(|ct| ct.contains("text/event-stream"));
 
         if !is_sse {
+            emit_uptime_entry(&state, config.group_id, server.server_id, status as i16, server_latency, request_id);
             // Non-SSE: log failover chain if applicable
             if failover_chain.len() > 1 {
                 emit_log_entry(
@@ -1015,6 +1029,7 @@ async fn proxy_handler(
                     last.status = 0;
                 }
                 emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path, config.group_key_id);
+                emit_uptime_entry(&state, config.group_id, server.server_id, 0, server_start.elapsed().as_millis() as i32, request_id);
                 // Circuit breaker: record TTFT timeout as error
                 if has_cb {
                     let tripped = circuit_breaker::record_error(
@@ -1039,6 +1054,7 @@ async fn proxy_handler(
                     // First chunk received within timeout
                     let ttft_ms = server_start.elapsed().as_millis() as i32;
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, Some(ttft_ms), false, &request_path, config.group_key_id);
+                    emit_uptime_entry(&state, config.group_id, server.server_id, status as i16, server_latency, request_id);
 
                     // Log failover chain if this wasn't the first server tried
                     if failover_chain.len() > 1 {
@@ -1088,6 +1104,7 @@ async fn proxy_handler(
                         last.status = 0;
                     }
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, false, &request_path, config.group_key_id);
+                    emit_uptime_entry(&state, config.group_id, server.server_id, 0, server_start.elapsed().as_millis() as i32, request_id);
                     if has_cb {
                         let tripped = circuit_breaker::record_error(
                             &state.redis, config.group_id, server.server_id,
@@ -1106,6 +1123,7 @@ async fn proxy_handler(
                         last.status = 0;
                     }
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, true, &request_path, config.group_key_id);
+                    emit_uptime_entry(&state, config.group_id, server.server_id, 0, server_start.elapsed().as_millis() as i32, request_id);
                     if has_cb {
                         let tripped = circuit_breaker::record_error(
                             &state.redis, config.group_id, server.server_id,
@@ -1124,6 +1142,7 @@ async fn proxy_handler(
                 Some(Ok(first_chunk)) => {
                     let ttft_ms = server_start.elapsed().as_millis() as i32;
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, Some(ttft_ms), false, &request_path, config.group_key_id);
+                    emit_uptime_entry(&state, config.group_id, server.server_id, status as i16, server_latency, request_id);
 
                     // Log failover chain if this wasn't the first server tried
                     if failover_chain.len() > 1 {
@@ -1170,6 +1189,7 @@ async fn proxy_handler(
                 Some(Err(_)) | None => {
                     // Empty stream or error — treat as connection error
                     emit_ttft_entry(&state, config.group_id, server.server_id, &request_model, None, false, &request_path, config.group_key_id);
+                    emit_uptime_entry(&state, config.group_id, server.server_id, 0, server_start.elapsed().as_millis() as i32, request_id);
                     if has_cb {
                         let tripped = circuit_breaker::record_error(
                             &state.redis, config.group_id, server.server_id,
@@ -1496,6 +1516,28 @@ fn emit_ttft_entry(
 
     if state.ttft_tx.try_send(entry).is_err() {
         tracing::warn!("TTFT buffer full, dropping TTFT log entry");
+    }
+}
+
+fn emit_uptime_entry(
+    state: &AppState,
+    group_id: uuid::Uuid,
+    server_id: uuid::Uuid,
+    status_code: i16,
+    latency_ms: i32,
+    request_id: uuid::Uuid,
+) {
+    let entry = UptimeCheckEntry {
+        group_id,
+        server_id,
+        status_code,
+        latency_ms,
+        request_id,
+        created_at: Utc::now(),
+    };
+
+    if state.uptime_tx.try_send(entry).is_err() {
+        tracing::warn!("Uptime buffer full, dropping uptime check entry");
     }
 }
 

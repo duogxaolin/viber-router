@@ -13,6 +13,7 @@ mod sse_usage_parser;
 mod subscription;
 mod telegram_notifier;
 mod ttft_buffer;
+mod uptime_buffer;
 mod usage_buffer;
 
 use std::time::Duration;
@@ -49,6 +50,7 @@ async fn main() -> Result<()> {
     partition::ensure_partitions(&db_pool, "proxy_logs").await;
     partition::ensure_partitions(&db_pool, "ttft_logs").await;
     partition::ensure_partitions(&db_pool, "token_usage_logs").await;
+    partition::ensure_partitions(&db_pool, "uptime_checks").await;
     tracing::info!("Partitions ensured");
 
     let redis_pool = redis::create_pool(&config)?;
@@ -62,6 +64,9 @@ async fn main() -> Result<()> {
 
     // Create token usage log buffer
     let (usage_tx, usage_rx) = tokio::sync::mpsc::channel(10_000);
+
+    // Create uptime check buffer
+    let (uptime_tx, uptime_rx) = tokio::sync::mpsc::channel(10_000);
 
     // Create and populate pricing cache
     let pricing_cache: routes::PricingCache = Arc::new(RwLock::new(HashMap::new()));
@@ -86,6 +91,7 @@ async fn main() -> Result<()> {
         log_tx,
         ttft_tx,
         usage_tx,
+        uptime_tx,
         pricing_cache: pricing_cache.clone(),
     };
 
@@ -98,6 +104,9 @@ async fn main() -> Result<()> {
     // Spawn token usage buffer flush task
     let usage_flush_handle = tokio::spawn(usage_buffer::flush_task(usage_rx, db_pool.clone()));
 
+    // Spawn uptime check buffer flush task
+    let uptime_flush_handle = tokio::spawn(uptime_buffer::flush_task(uptime_rx, db_pool.clone()));
+
     // Spawn daily partition maintenance
     let retention_days = config.log_retention_days;
     let partition_pool = db_pool.clone();
@@ -109,9 +118,11 @@ async fn main() -> Result<()> {
             partition::ensure_partitions(&partition_pool, "proxy_logs").await;
             partition::ensure_partitions(&partition_pool, "ttft_logs").await;
             partition::ensure_partitions(&partition_pool, "token_usage_logs").await;
+            partition::ensure_partitions(&partition_pool, "uptime_checks").await;
             partition::drop_expired_partitions(&partition_pool, "proxy_logs", retention_days).await;
             partition::drop_expired_partitions(&partition_pool, "ttft_logs", retention_days).await;
             partition::drop_expired_partitions(&partition_pool, "token_usage_logs", retention_days).await;
+            partition::drop_expired_partitions(&partition_pool, "uptime_checks", retention_days).await;
             tracing::info!("Daily partition maintenance complete");
         }
     });
@@ -141,6 +152,7 @@ async fn main() -> Result<()> {
     let _ = flush_handle.await;
     let _ = ttft_flush_handle.await;
     let _ = usage_flush_handle.await;
+    let _ = uptime_flush_handle.await;
 
     tracing::info!("Server shut down");
     Ok(())

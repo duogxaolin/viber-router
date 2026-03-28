@@ -13,6 +13,7 @@ mod public;
 
 use crate::log_buffer::ProxyLogEntry;
 use crate::ttft_buffer::TtftLogEntry;
+use crate::uptime_buffer::UptimeCheckEntry;
 use crate::usage_buffer::TokenUsageEntry;
 
 #[derive(Debug, Clone)]
@@ -34,6 +35,7 @@ pub struct AppState {
     pub log_tx: mpsc::Sender<ProxyLogEntry>,
     pub ttft_tx: mpsc::Sender<TtftLogEntry>,
     pub usage_tx: mpsc::Sender<TokenUsageEntry>,
+    pub uptime_tx: mpsc::Sender<UptimeCheckEntry>,
     pub pricing_cache: PricingCache,
 }
 
