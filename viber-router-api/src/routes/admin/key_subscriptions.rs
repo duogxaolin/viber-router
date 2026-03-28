@@ -59,8 +59,8 @@ async fn assign_subscription(
     }
 
     let sub = sqlx::query_as::<_, KeySubscription>(
-        "INSERT INTO key_subscriptions (group_key_id, plan_id, sub_type, cost_limit_usd, model_limits, reset_hours, duration_days) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
+        "INSERT INTO key_subscriptions (group_key_id, plan_id, sub_type, cost_limit_usd, model_limits, reset_hours, duration_days, rpm_limit) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
     )
     .bind(key_id)
     .bind(plan.id)
@@ -69,6 +69,7 @@ async fn assign_subscription(
     .bind(&plan.model_limits)
     .bind(plan.reset_hours)
     .bind(plan.duration_days)
+    .bind(plan.rpm_limit)
     .fetch_one(&state.db)
     .await
     .map_err(internal)?;

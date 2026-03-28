@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
     routing::get,
 };
+use deadpool_redis::redis::AsyncCommands;
 use uuid::Uuid;
 
 use crate::models::{CreateSubscriptionPlan, SubscriptionPlan, UpdateSubscriptionPlan};
@@ -23,6 +24,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_plans).post(create_plan))
         .route("/{id}", get(get_plan).patch(update_plan).delete(delete_plan))
+        .route("/{id}/sync-rpm", axum::routing::post(sync_rpm))
 }
 
 async fn create_plan(
@@ -39,8 +41,8 @@ async fn create_plan(
     let model_limits = input.model_limits.unwrap_or(serde_json::json!({}));
 
     let plan = sqlx::query_as::<_, SubscriptionPlan>(
-        "INSERT INTO subscription_plans (name, sub_type, cost_limit_usd, model_limits, reset_hours, duration_days) \
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+        "INSERT INTO subscription_plans (name, sub_type, cost_limit_usd, model_limits, reset_hours, duration_days, rpm_limit) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
     )
     .bind(&input.name)
     .bind(&input.sub_type)
@@ -48,6 +50,7 @@ async fn create_plan(
     .bind(&model_limits)
     .bind(input.reset_hours)
     .bind(input.duration_days)
+    .bind(input.rpm_limit)
     .fetch_one(&state.db)
     .await
     .map_err(internal)?;
@@ -104,8 +107,9 @@ async fn update_plan(
          reset_hours = CASE WHEN $5 THEN $6 ELSE reset_hours END, \
          duration_days = COALESCE($7, duration_days), \
          is_active = COALESCE($8, is_active), \
+         rpm_limit = CASE WHEN $9 THEN $10 ELSE rpm_limit END, \
          updated_at = now() \
-         WHERE id = $9 RETURNING *",
+         WHERE id = $11 RETURNING *",
     )
     .bind(&input.name)
     .bind(&input.sub_type)
@@ -115,11 +119,38 @@ async fn update_plan(
     .bind(input.reset_hours.flatten())
     .bind(input.duration_days)
     .bind(input.is_active)
+    .bind(input.rpm_limit.is_some())
+    .bind(input.rpm_limit.flatten())
     .bind(id)
     .fetch_optional(&state.db)
     .await
     .map_err(internal)?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Plan not found"))?;
+
+    // Auto-sync rpm_limit to active subscriptions when rpm_limit is updated
+    if input.rpm_limit.is_some() {
+        let _ = sqlx::query(
+            "UPDATE key_subscriptions SET rpm_limit = $1 WHERE plan_id = $2 AND status = 'active'",
+        )
+        .bind(plan.rpm_limit)
+        .bind(id)
+        .execute(&state.db)
+        .await;
+
+        let key_ids: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT DISTINCT group_key_id FROM key_subscriptions WHERE plan_id = $1 AND status = 'active'",
+        )
+        .bind(id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        if let Ok(mut conn) = state.redis.get().await {
+            for (key_id,) in &key_ids {
+                let _: Result<(), _> = conn.del(format!("key_subs:{key_id}")).await;
+            }
+        }
+    }
 
     Ok(Json(plan))
 }
@@ -151,4 +182,50 @@ async fn delete_plan(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Serialize)]
+struct SyncResult {
+    updated: u64,
+}
+
+async fn sync_rpm(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<SyncResult>, ApiError> {
+    let plan = sqlx::query_as::<_, SubscriptionPlan>(
+        "SELECT * FROM subscription_plans WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Plan not found"))?;
+
+    // Update rpm_limit on all active subscriptions from this plan
+    let result = sqlx::query(
+        "UPDATE key_subscriptions SET rpm_limit = $1 WHERE plan_id = $2 AND status = 'active'",
+    )
+    .bind(plan.rpm_limit)
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(internal)?;
+
+    // Invalidate subscription list caches for affected keys
+    let key_ids: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT DISTINCT group_key_id FROM key_subscriptions WHERE plan_id = $1 AND status = 'active'",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    if let Ok(mut conn) = state.redis.get().await {
+        for (key_id,) in &key_ids {
+            let _: Result<(), _> = conn.del(format!("key_subs:{key_id}")).await;
+        }
+    }
+
+    Ok(Json(SyncResult { updated: result.rows_affected() }))
 }
