@@ -7,6 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::cache;
 use crate::models::Settings;
 use crate::routes::AppState;
 
@@ -16,6 +17,7 @@ fn default_settings() -> Settings {
         telegram_chat_ids: vec![],
         alert_status_codes: vec![500, 502, 503],
         alert_cooldown_mins: 5,
+        blocked_paths: vec![],
     }
 }
 
@@ -23,7 +25,7 @@ async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<Json<Settings>, (StatusCode, Json<Value>)> {
     let row = sqlx::query_as::<_, Settings>(
-        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins \
+        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths \
          FROM settings WHERE id = 1",
     )
     .fetch_optional(&state.db)
@@ -44,6 +46,7 @@ pub struct UpdateSettings {
     pub telegram_chat_ids: Option<Vec<String>>,
     pub alert_status_codes: Option<Vec<i32>>,
     pub alert_cooldown_mins: Option<i32>,
+    pub blocked_paths: Option<Vec<String>>,
 }
 
 async fn put_settings(
@@ -52,7 +55,7 @@ async fn put_settings(
 ) -> Result<Json<Settings>, (StatusCode, Json<Value>)> {
     // Fetch current (or defaults) to merge with partial update
     let current = sqlx::query_as::<_, Settings>(
-        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins \
+        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths \
          FROM settings WHERE id = 1",
     )
     .fetch_optional(&state.db)
@@ -72,21 +75,25 @@ async fn put_settings(
     let new_chat_ids = input.telegram_chat_ids.unwrap_or(current.telegram_chat_ids);
     let new_status_codes = input.alert_status_codes.unwrap_or(current.alert_status_codes);
     let new_cooldown = input.alert_cooldown_mins.unwrap_or(current.alert_cooldown_mins);
+    let blocked_paths_changed = input.blocked_paths.is_some();
+    let new_blocked_paths = input.blocked_paths.unwrap_or(current.blocked_paths);
 
     let updated = sqlx::query_as::<_, Settings>(
-        "INSERT INTO settings (id, telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins) \
-         VALUES (1, $1, $2, $3, $4) \
+        "INSERT INTO settings (id, telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths) \
+         VALUES (1, $1, $2, $3, $4, $5) \
          ON CONFLICT (id) DO UPDATE SET \
            telegram_bot_token = EXCLUDED.telegram_bot_token, \
            telegram_chat_ids = EXCLUDED.telegram_chat_ids, \
            alert_status_codes = EXCLUDED.alert_status_codes, \
-           alert_cooldown_mins = EXCLUDED.alert_cooldown_mins \
-         RETURNING telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins",
+           alert_cooldown_mins = EXCLUDED.alert_cooldown_mins, \
+           blocked_paths = EXCLUDED.blocked_paths \
+         RETURNING telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths",
     )
     .bind(&new_token)
     .bind(&new_chat_ids)
     .bind(&new_status_codes)
     .bind(new_cooldown)
+    .bind(&new_blocked_paths)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -96,6 +103,10 @@ async fn put_settings(
         )
     })?;
 
+    if blocked_paths_changed {
+        cache::invalidate_blocked_paths(&state.redis).await;
+    }
+
     Ok(Json(updated))
 }
 
@@ -103,7 +114,7 @@ async fn post_test_alert(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let settings = sqlx::query_as::<_, Settings>(
-        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins \
+        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths \
          FROM settings WHERE id = 1",
     )
     .fetch_optional(&state.db)
@@ -174,7 +185,7 @@ async fn get_telegram_chats(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let settings = sqlx::query_as::<_, Settings>(
-        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins \
+        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths \
          FROM settings WHERE id = 1",
     )
     .fetch_optional(&state.db)

@@ -71,6 +71,43 @@
       </q-card-section>
     </q-card>
 
+    <q-card flat bordered style="max-width: 640px" class="q-mt-md">
+      <q-card-section>
+        <div class="text-subtitle1 q-mb-md">Blocked API Paths</div>
+
+        <div class="q-mb-xs" role="group" aria-label="Blocked API Paths">
+          <q-chip
+            v-for="path in form.blocked_paths"
+            :key="path"
+            removable
+            dense
+            :remove-aria-label="`Remove ${path}`"
+            @remove="removeBlockedPath(path)"
+          >
+            {{ path }}
+          </q-chip>
+          <span v-if="form.blocked_paths.length === 0" class="text-grey text-caption">
+            No blocked paths
+          </span>
+        </div>
+
+        <div class="row q-gutter-sm items-center q-mb-md">
+          <q-input
+            v-model="newBlockedPath"
+            label="Add path (e.g. /v1/completions)"
+            outlined
+            dense
+            class="col"
+            @keyup.enter="addBlockedPath"
+          />
+          <q-btn outline dense label="Add" @click="addBlockedPath" />
+        </div>
+
+        <div v-if="saveError" class="text-negative text-caption q-mb-sm">{{ saveError }}</div>
+        <q-btn color="primary" label="Save Settings" :loading="saving" @click="saveSettings" />
+      </q-card-section>
+    </q-card>
+
     <!-- Chat discovery dialog -->
     <q-dialog v-model="showChatsDialog">
       <q-card style="min-width: 400px">
@@ -126,6 +163,7 @@ interface Settings {
   telegram_chat_ids: string[];
   alert_status_codes: number[];
   alert_cooldown_mins: number;
+  blocked_paths: string[];
 }
 
 interface TelegramChat {
@@ -141,6 +179,7 @@ const form = ref<Settings>({
   telegram_chat_ids: [],
   alert_status_codes: [500, 502, 503],
   alert_cooldown_mins: 5,
+  blocked_paths: [],
 });
 
 const alertStatusCodesStr = computed({
@@ -161,6 +200,7 @@ const chatsError = ref('');
 const showChatsDialog = ref(false);
 const discoveredChats = ref<TelegramChat[]>([]);
 const selectedChats = ref<string[]>([]);
+const newBlockedPath = ref('');
 
 onMounted(async () => {
   try {
@@ -184,6 +224,7 @@ async function saveSettings() {
       telegram_chat_ids: form.value.telegram_chat_ids,
       alert_status_codes: form.value.alert_status_codes,
       alert_cooldown_mins: form.value.alert_cooldown_mins,
+      blocked_paths: form.value.blocked_paths,
     });
     form.value = data;
     $q.notify({ type: 'positive', message: 'Settings saved' });
@@ -230,5 +271,21 @@ function addSelectedChats() {
     existing.add(id);
   }
   form.value.telegram_chat_ids = Array.from(existing);
+}
+
+function addBlockedPath() {
+  const path = newBlockedPath.value.trim();
+  if (!path) return;
+  if (form.value.blocked_paths.includes(path)) {
+    $q.notify({ type: 'warning', message: 'Path already in the list' });
+    newBlockedPath.value = '';
+    return;
+  }
+  form.value.blocked_paths.push(path);
+  newBlockedPath.value = '';
+}
+
+function removeBlockedPath(path: string) {
+  form.value.blocked_paths = form.value.blocked_paths.filter((p) => p !== path);
 }
 </script>

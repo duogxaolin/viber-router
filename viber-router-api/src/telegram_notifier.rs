@@ -10,6 +10,7 @@ fn default_settings() -> Settings {
         telegram_chat_ids: vec![],
         alert_status_codes: vec![500, 502, 503],
         alert_cooldown_mins: 5,
+        blocked_paths: vec![],
     }
 }
 
@@ -188,7 +189,7 @@ pub async fn send_circuit_re_enable_alert(ctx: CircuitReEnableAlertContext) {
 
 async fn load_settings(db: &PgPool) -> Option<Settings> {
     match sqlx::query_as::<_, Settings>(
-        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins \
+        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths \
          FROM settings WHERE id = 1",
     )
     .fetch_optional(db)

@@ -24,7 +24,7 @@ The system SHALL cache the full group configuration (group details, server list 
 - **THEN** the proxy SHALL return HTTP 429 with `"All upstream servers unavailable"`
 
 ### Requirement: Write-through cache invalidation
-The system SHALL invalidate relevant Redis cache entries immediately when admin operations modify group configuration.
+The system SHALL invalidate relevant Redis cache entries immediately when admin operations modify group configuration or global settings.
 
 #### Scenario: Group updated
 - **WHEN** a group's name, failover_status_codes, is_active, count_tokens_server_id, or count_tokens_model_mappings is updated
@@ -45,3 +45,7 @@ The system SHALL invalidate relevant Redis cache entries immediately when admin 
 #### Scenario: Group deleted
 - **WHEN** a group is deleted
 - **THEN** the Redis cache entry for that group's API key SHALL be deleted
+
+#### Scenario: Settings blocked paths updated
+- **WHEN** an admin updates settings via PUT `/api/admin/settings` and the request includes `blocked_paths`
+- **THEN** the Redis key `settings:blocked_paths` SHALL be deleted so the next proxy request reloads from the database

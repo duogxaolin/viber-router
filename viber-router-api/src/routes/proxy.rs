@@ -272,6 +272,35 @@ async fn proxy_handler(
     OriginalUri(original_uri): OriginalUri,
     req: Request,
 ) -> Response {
+    // Check blocked paths first — before any auth
+    let request_path = original_uri.path();
+    let blocked = match cache::get_blocked_paths(&state.redis).await {
+        Ok(Some(paths)) => paths,
+        Ok(None) => {
+            // Cache miss — load from DB and populate cache
+            match sqlx::query_as::<_, (Vec<String>,)>(
+                "SELECT blocked_paths FROM settings WHERE id = 1",
+            )
+            .fetch_optional(&state.db)
+            .await
+            {
+                Ok(Some((paths,))) => {
+                    cache::set_blocked_paths(&state.redis, &paths).await;
+                    paths
+                }
+                Ok(None) => {
+                    cache::set_blocked_paths(&state.redis, &[]).await;
+                    vec![]
+                }
+                Err(_) => vec![], // DB failure: fail-open
+            }
+        }
+        Err(()) => vec![], // Redis failure: fail-open
+    };
+    if blocked.iter().any(|p| p == request_path) {
+        return anthropic_error(StatusCode::NOT_FOUND, "not_found_error", "Not found");
+    }
+
     // Extract API key from x-api-key header, falling back to Authorization: Bearer <key>
     let raw_key = match req
         .headers()

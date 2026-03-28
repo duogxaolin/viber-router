@@ -77,3 +77,26 @@ pub async fn invalidate_groups_by_server(redis: &Pool, db: &PgPool, server_id: U
         invalidate_group_all_keys(redis, db, gid).await;
     }
 }
+
+const BLOCKED_PATHS_KEY: &str = "settings:blocked_paths";
+
+/// Returns Ok(Some(paths)) on cache hit, Ok(None) on cache miss, Err(()) on Redis failure.
+pub async fn get_blocked_paths(redis: &Pool) -> Result<Option<Vec<String>>, ()> {
+    let mut conn = redis.get().await.map_err(|_| ())?;
+    let data: Option<String> = conn.get(BLOCKED_PATHS_KEY).await.map_err(|_| ())?;
+    Ok(data.and_then(|d| serde_json::from_str(&d).ok()))
+}
+
+pub async fn set_blocked_paths(redis: &Pool, paths: &[String]) {
+    if let Ok(mut conn) = redis.get().await
+        && let Ok(data) = serde_json::to_string(paths)
+    {
+        let _: Result<(), _> = conn.set(BLOCKED_PATHS_KEY, data).await;
+    }
+}
+
+pub async fn invalidate_blocked_paths(redis: &Pool) {
+    if let Ok(mut conn) = redis.get().await {
+        let _: Result<(), _> = conn.del(BLOCKED_PATHS_KEY).await;
+    }
+}

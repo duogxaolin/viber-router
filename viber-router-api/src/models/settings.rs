@@ -7,4 +7,6 @@ pub struct Settings {
     pub telegram_chat_ids: Vec<String>,
     pub alert_status_codes: Vec<i32>,
     pub alert_cooldown_mins: i32,
+    #[serde(default)]
+    pub blocked_paths: Vec<String>,
 }
