@@ -109,6 +109,33 @@ impl SseUsageParser {
                         .get("output_tokens")
                         .and_then(|v| v.as_i64())
                         .map(|v| v as i32);
+                    // Some upstreams (e.g. proxies/gateways) send input_tokens: 0 in
+                    // message_start and the real count in message_delta. Overwrite if
+                    // present and non-zero so we capture the actual value.
+                    if let Some(input) = usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        && (input > 0 || self.input_tokens.is_none())
+                    {
+                        self.input_tokens = Some(input);
+                    }
+                    if let Some(cc) = usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        && (cc > 0 || self.cache_creation_tokens.is_none())
+                    {
+                        self.cache_creation_tokens = Some(cc);
+                    }
+                    if let Some(cr) = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        && (cr > 0 || self.cache_read_tokens.is_none())
+                    {
+                        self.cache_read_tokens = Some(cr);
+                    }
                 }
             }
             _ => {}
@@ -192,5 +219,41 @@ mod tests {
         let result = parser.finish().unwrap();
         assert_eq!(result.input_tokens, 50);
         assert_eq!(result.output_tokens, 25);
+    }
+
+    #[test]
+    fn test_upstream_zero_start_real_delta() {
+        // Non-standard upstream: sends input_tokens:0 in message_start,
+        // real count in message_delta
+        let mut parser = SseUsageParser::new();
+        let data = b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":20,\"output_tokens\":191}}\n\n";
+        parser.feed(data);
+        let result = parser.finish().unwrap();
+        assert_eq!(result.input_tokens, 20);
+        assert_eq!(result.output_tokens, 191);
+    }
+
+    #[test]
+    fn test_upstream_zero_start_real_delta_with_cache() {
+        let mut parser = SseUsageParser::new();
+        let data = b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":500,\"output_tokens\":300,\"cache_creation_input_tokens\":100,\"cache_read_input_tokens\":200}}\n\n";
+        parser.feed(data);
+        let result = parser.finish().unwrap();
+        assert_eq!(result.input_tokens, 500);
+        assert_eq!(result.output_tokens, 300);
+        assert_eq!(result.cache_creation_tokens, Some(100));
+        assert_eq!(result.cache_read_tokens, Some(200));
+    }
+
+    #[test]
+    fn test_standard_upstream_not_overwritten_by_delta() {
+        // Standard Anthropic: real input in message_start, no input in message_delta
+        let mut parser = SseUsageParser::new();
+        let data = b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":150,\"cache_read_input_tokens\":50}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":80}}\n\n";
+        parser.feed(data);
+        let result = parser.finish().unwrap();
+        assert_eq!(result.input_tokens, 150);
+        assert_eq!(result.output_tokens, 80);
+        assert_eq!(result.cache_read_tokens, Some(50));
     }
 }
