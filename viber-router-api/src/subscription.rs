@@ -1,5 +1,5 @@
 use chrono::Utc;
-use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::redis::{AsyncCommands, cmd};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -11,7 +11,10 @@ pub enum SubCheckResult {
     /// No subscriptions exist for this key — unlimited usage.
     Unlimited,
     /// A subscription was selected for charging.
-    Allowed { subscription_id: Uuid },
+    Allowed {
+        subscription_id: Uuid,
+        rpm_limit: Option<f64>,
+    },
     /// All subscriptions are blocked (exhausted/expired/cancelled or per-model limit hit).
     Blocked,
 }
@@ -269,8 +272,19 @@ pub async fn check_subscriptions(
             }
         }
 
+        // Check RPM limit
+        if let Some(rpm) = sub.rpm_limit
+            && rpm > 0.0
+            && is_rpm_limited(state, sub.id, rpm).await
+        {
+            continue;
+        }
+
         // This subscription has budget — select it
-        return SubCheckResult::Allowed { subscription_id: sub.id };
+        return SubCheckResult::Allowed {
+            subscription_id: sub.id,
+            rpm_limit: sub.rpm_limit,
+        };
     }
 
     SubCheckResult::Blocked
@@ -409,4 +423,48 @@ pub async fn update_cost_counters(
             .query_async(&mut *conn)
             .await;
     }
+}
+
+/// Compute the RPM window parameters from a float RPM value.
+/// Returns (window_seconds, max_requests).
+/// RPM < 1: scale window up, max = 1. RPM >= 1: window = 60s, max = floor(rpm).
+pub fn compute_rpm_window(rpm: f64) -> (i64, i64) {
+    if rpm < 1.0 {
+        let window = (60.0 / rpm).ceil() as i64;
+        (window, 1)
+    } else {
+        (60, rpm.floor() as i64)
+    }
+}
+
+/// Check if a subscription has exceeded its RPM limit.
+/// Fails open on Redis errors (returns false).
+async fn is_rpm_limited(state: &AppState, sub_id: Uuid, rpm: f64) -> bool {
+    let key = format!("sub_rpm:{sub_id}");
+    let Ok(mut conn) = state.redis.get().await else {
+        return false; // fail open
+    };
+    let count: Option<i64> = match cmd("GET").arg(&key).query_async(&mut *conn).await {
+        Ok(c) => c,
+        Err(_) => return false, // fail open
+    };
+    let (_, max_requests) = compute_rpm_window(rpm);
+    count.unwrap_or(0) >= max_requests
+}
+
+/// Increment the RPM counter for a subscription after selecting it for a request.
+/// Always sets TTL to ensure the key expires even if a previous EXPIRE failed.
+/// Silently skips on Redis errors.
+pub async fn increment_rpm(state: &AppState, sub_id: Uuid, rpm: f64) {
+    let key = format!("sub_rpm:{sub_id}");
+    let Ok(mut conn) = state.redis.get().await else {
+        return;
+    };
+    let _: Result<i64, _> = cmd("INCR").arg(&key).query_async(&mut *conn).await;
+    let (window_seconds, _) = compute_rpm_window(rpm);
+    let _: Result<(), _> = cmd("EXPIRE")
+        .arg(&key)
+        .arg(window_seconds)
+        .query_async(&mut *conn)
+        .await;
 }
