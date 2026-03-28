@@ -132,6 +132,9 @@
               />
               <div class="row items-center">
                 <span class="text-caption">${{ sub.cost_used.toFixed(2) }} / ${{ sub.cost_limit_usd.toFixed(2) }}</span>
+                <span v-if="sub.rpm_limit != null" class="text-caption q-ml-md" style="color: var(--vr-text-secondary)">
+                  {{ sub.rpm_limit }} RPM
+                </span>
                 <q-space />
                 <span v-if="sub.window_reset_at" class="text-caption" style="color: var(--vr-text-secondary)">
                   Resets in {{ formatCountdown(sub.window_reset_at) }}
@@ -317,6 +320,7 @@ interface Subscription {
   id: string;
   sub_type: string;
   cost_limit_usd: number;
+  rpm_limit: number | null;
   status: string;
   cost_used: number;
   window_reset_at: string | null;

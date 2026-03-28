@@ -687,6 +687,7 @@ interface KeySubscription {
   cost_limit_usd: number;
   model_limits: Record<string, number>;
   reset_hours: number | null;
+  rpm_limit: number | null;
   duration_days: number;
   status: string;
   activated_at: string | null;
@@ -709,6 +710,7 @@ const subColumns = [
   { name: 'sub_type', label: 'Type', field: 'sub_type', align: 'left' as const },
   { name: 'cost_limit_usd', label: 'Budget', field: 'cost_limit_usd', align: 'right' as const, format: (v: number) => `$${v.toFixed(2)}` },
   { name: 'cost_used', label: 'Used', field: 'cost_used', align: 'right' as const },
+  { name: 'rpm_limit', label: 'RPM', field: 'rpm_limit', align: 'right' as const, format: (v: number | null) => v != null ? String(v) : '\u2014' },
   { name: 'status', label: 'Status', field: 'status', align: 'center' as const },
   { name: 'duration_days', label: 'Duration', field: 'duration_days', align: 'right' as const, format: (v: number) => `${v}d` },
   { name: 'actions', label: '', field: 'id', align: 'right' as const },

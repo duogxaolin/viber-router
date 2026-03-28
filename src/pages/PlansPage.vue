@@ -34,6 +34,9 @@
       <template #body-cell-actions="props">
         <q-td :props="props">
           <q-btn flat dense icon="edit" @click="openEdit(props.row)" />
+          <q-btn flat dense icon="sync" @click="onSyncRpm(props.row)">
+            <q-tooltip>Sync RPM to active subscriptions</q-tooltip>
+          </q-btn>
           <q-btn flat dense icon="delete" color="negative" @click="onDelete(props.row)" />
         </q-td>
       </template>
@@ -48,6 +51,7 @@
           <q-input v-model.number="form.cost_limit_usd" label="Cost Limit ($)" outlined dense type="number" :min="0" />
           <q-input v-model.number="form.duration_days" label="Duration (days)" outlined dense type="number" :min="1" />
           <q-input v-if="form.sub_type === 'hourly_reset'" v-model.number="form.reset_hours" label="Reset Hours" outlined dense type="number" :min="1" />
+          <q-input v-model.number="form.rpm_limit" label="RPM Limit" outlined dense type="number" :min="0" :step="0.1" hint="Requests per minute (empty = unlimited)" clearable @clear="form.rpm_limit = null" />
           <div class="text-subtitle2 q-mt-sm">Model Limits</div>
           <div v-for="(entry, idx) in modelLimitEntries" :key="idx" class="row q-gutter-sm q-mb-xs">
             <q-select v-model="entry.model" :options="availableModels" label="Model" outlined dense emit-value map-options style="flex:2" />
@@ -78,6 +82,7 @@ interface Plan {
   cost_limit_usd: number;
   model_limits: Record<string, number>;
   reset_hours: number | null;
+  rpm_limit: number | null;
   duration_days: number;
   is_active: boolean;
   created_at: string;
@@ -101,12 +106,14 @@ const form = reactive({
   cost_limit_usd: 0,
   duration_days: 30,
   reset_hours: null as number | null,
+  rpm_limit: null as number | null,
 });
 
 const columns = [
   { name: 'name', label: 'Name', field: 'name', align: 'left' as const },
   { name: 'sub_type', label: 'Type', field: 'sub_type', align: 'left' as const },
   { name: 'cost_limit_usd', label: 'Cost Limit', field: 'cost_limit_usd', align: 'right' as const, format: (v: number) => `$${v.toFixed(2)}` },
+  { name: 'rpm_limit', label: 'RPM', field: 'rpm_limit', align: 'right' as const, format: (v: number | null) => v != null ? String(v) : '\u2014' },
   { name: 'model_limits', label: 'Model Limits', field: 'model_limits', align: 'left' as const },
   { name: 'reset_hours', label: 'Reset Hours', field: 'reset_hours', align: 'right' as const, format: (v: number | null) => v != null ? String(v) : '\u2014' },
   { name: 'duration_days', label: 'Duration (days)', field: 'duration_days', align: 'right' as const },
@@ -148,6 +155,7 @@ function openEdit(row: Plan) {
   form.cost_limit_usd = row.cost_limit_usd;
   form.duration_days = row.duration_days;
   form.reset_hours = row.reset_hours;
+  form.rpm_limit = row.rpm_limit;
   modelLimitEntries.value = Object.entries(row.model_limits || {}).map(([model, limit]) => ({ model, limit: limit as number }));
   showDialog.value = true;
 }
@@ -158,6 +166,7 @@ function resetForm() {
   form.cost_limit_usd = 0;
   form.duration_days = 30;
   form.reset_hours = null;
+  form.rpm_limit = null;
   modelLimitEntries.value = [];
 }
 
@@ -182,6 +191,7 @@ async function onSave() {
       cost_limit_usd: form.cost_limit_usd,
       duration_days: form.duration_days,
       reset_hours: form.sub_type === 'hourly_reset' ? form.reset_hours : null,
+      rpm_limit: form.rpm_limit && Number.isFinite(form.rpm_limit) ? form.rpm_limit : null,
       model_limits: buildModelLimits(),
     };
     if (editingId.value) {
@@ -221,6 +231,22 @@ async function onDelete(row: Plan) {
         $q.notify({ type: 'negative', message: msg });
       }
     });
+}
+
+async function onSyncRpm(row: Plan) {
+  $q.dialog({
+    title: 'Sync RPM',
+    message: `Sync RPM limit (${row.rpm_limit != null ? `${row.rpm_limit} RPM` : 'unlimited'}) to all active subscriptions of "${row.name}"?`,
+    cancel: true,
+  }).onOk(async () => {
+    try {
+      const { data } = await api.post<{ updated: number }>(`/api/admin/subscription-plans/${row.id}/sync-rpm`);
+      $q.notify({ type: 'positive', message: `RPM synced to ${data.updated} subscription(s)` });
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to sync';
+      $q.notify({ type: 'negative', message: msg });
+    }
+  });
 }
 
 onMounted(() => {
