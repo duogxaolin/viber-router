@@ -34,7 +34,7 @@ The system SHALL return token usage data from the last 30 days only.
 - **THEN** only the 15-day-old records are included in the response
 
 ### Requirement: Subscription data includes cost_used and window reset time
-The system SHALL return all subscriptions (all statuses) for the sub-key, each enriched with `cost_used` (current cost from Redis/DB) and `window_reset_at` (for hourly_reset type only).
+The system SHALL return non-cancelled subscriptions (`active`, `exhausted`, `expired`) for the sub-key, each enriched with `cost_used` (current cost from Redis/DB) and `window_reset_at` (for hourly_reset type only). Subscriptions with status `cancelled` are excluded.
 
 #### Scenario: Active fixed subscription
 - **WHEN** a sub-key has an active fixed subscription with $2.50 used of $10.00 limit
@@ -44,9 +44,13 @@ The system SHALL return all subscriptions (all statuses) for the sub-key, each e
 - **WHEN** a sub-key has an active hourly_reset subscription with `reset_hours: 4` and current window ends at 2026-03-27T18:00:00Z
 - **THEN** the subscription entry includes `cost_used` for the current window and `window_reset_at: "2026-03-27T18:00:00Z"`
 
-#### Scenario: Expired/cancelled/exhausted subscriptions
-- **WHEN** a sub-key has subscriptions with status `expired`, `cancelled`, or `exhausted`
+#### Scenario: Expired/exhausted subscriptions
+- **WHEN** a sub-key has subscriptions with status `expired` or `exhausted`
 - **THEN** these subscriptions are included in the response with their actual status and `cost_used: 0.0`
+
+#### Scenario: Cancelled subscriptions are excluded
+- **WHEN** a sub-key has subscriptions with status `cancelled`
+- **THEN** these subscriptions are NOT included in the response
 
 ### Requirement: IP-based rate limiting
 The system SHALL rate-limit the public usage endpoint to 30 requests per 60-second window per client IP address using Redis.

@@ -138,7 +138,7 @@ pub async fn public_usage(
 
     // Query subscriptions and enrich with cost_used + window_reset_at
     let subs = sqlx::query_as::<_, crate::models::KeySubscription>(
-        "SELECT * FROM key_subscriptions WHERE group_key_id = $1 ORDER BY status = 'active' DESC, created_at DESC",
+        "SELECT * FROM key_subscriptions WHERE group_key_id = $1 AND status != 'cancelled' ORDER BY status = 'active' DESC, created_at DESC",
     )
     .bind(key_info.key_id)
     .fetch_all(&state.db)
