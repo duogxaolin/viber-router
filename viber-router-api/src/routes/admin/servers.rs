@@ -178,7 +178,7 @@ async fn update_server(
                 "UPDATE servers SET \
                  name = COALESCE($1, name), \
                  base_url = COALESCE($2, base_url), \
-                 system_prompt = COALESCE($3, system_prompt), \
+                 system_prompt = $3, \
                  updated_at = now() \
                  WHERE id = $4 RETURNING *",
             )
@@ -195,7 +195,7 @@ async fn update_server(
                 "UPDATE servers SET \
                  name = COALESCE($1, name), \
                  base_url = COALESCE($2, base_url), \
-                 system_prompt = COALESCE($3, system_prompt), \
+                 system_prompt = $3, \
                  password_hash = NULL, \
                  updated_at = now() \
                  WHERE id = $4 RETURNING *",
@@ -213,7 +213,7 @@ async fn update_server(
                 "UPDATE servers SET \
                  name = COALESCE($1, name), \
                  base_url = COALESCE($2, base_url), \
-                 system_prompt = COALESCE($3, system_prompt), \
+                 system_prompt = $3, \
                  password_hash = $4, \
                  updated_at = now() \
                  WHERE id = $5 RETURNING *",
@@ -232,7 +232,7 @@ async fn update_server(
                 "UPDATE servers SET \
                  name = COALESCE($1, name), \
                  base_url = COALESCE($2, base_url), \
-                 system_prompt = COALESCE($3, system_prompt), \
+                 system_prompt = $3, \
                  api_key = NULL, \
                  updated_at = now() \
                  WHERE id = $4 RETURNING *",
@@ -249,7 +249,7 @@ async fn update_server(
                 "UPDATE servers SET \
                  name = COALESCE($1, name), \
                  base_url = COALESCE($2, base_url), \
-                 system_prompt = COALESCE($3, system_prompt), \
+                 system_prompt = $3, \
                  api_key = NULL, \
                  password_hash = NULL, \
                  updated_at = now() \
@@ -267,7 +267,7 @@ async fn update_server(
                 "UPDATE servers SET \
                  name = COALESCE($1, name), \
                  base_url = COALESCE($2, base_url), \
-                 system_prompt = COALESCE($3, system_prompt), \
+                 system_prompt = $3, \
                  api_key = NULL, \
                  password_hash = $4, \
                  updated_at = now() \
@@ -287,7 +287,7 @@ async fn update_server(
                 "UPDATE servers SET \
                  name = COALESCE($1, name), \
                  base_url = COALESCE($2, base_url), \
-                 system_prompt = COALESCE($3, system_prompt), \
+                 system_prompt = $3, \
                  api_key = $4, \
                  updated_at = now() \
                  WHERE id = $5 RETURNING *",
@@ -305,7 +305,7 @@ async fn update_server(
                 "UPDATE servers SET \
                  name = COALESCE($1, name), \
                  base_url = COALESCE($2, base_url), \
-                 system_prompt = COALESCE($3, system_prompt), \
+                 system_prompt = $3, \
                  api_key = $4, \
                  password_hash = NULL, \
                  updated_at = now() \
@@ -324,7 +324,7 @@ async fn update_server(
                 "UPDATE servers SET \
                  name = COALESCE($1, name), \
                  base_url = COALESCE($2, base_url), \
-                 system_prompt = COALESCE($3, system_prompt), \
+                 system_prompt = $3, \
                  api_key = $4, \
                  password_hash = $5, \
                  updated_at = now() \

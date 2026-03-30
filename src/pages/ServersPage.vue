@@ -170,26 +170,24 @@ async function saveServer() {
     const apiKey = form.value.api_key || null;
     const systemPrompt = form.value.system_prompt || null;
     if (editingServer.value) {
-      const input: { name: string; base_url: string; api_key: string | null; password?: string | null; system_prompt?: string | null } = {
+      const input: { name: string; base_url: string; api_key: string | null; password?: string | null; system_prompt: string | null } = {
         name: form.value.name,
         base_url: form.value.base_url,
         api_key: apiKey,
+        system_prompt: systemPrompt,
       };
       if (form.value.password) {
         input.password = form.value.password;
       }
-      if (systemPrompt !== null) {
-        input.system_prompt = systemPrompt;
-      }
       await store.updateServer(editingServer.value.id, input);
     } else {
-      const input: { name: string; base_url: string; api_key?: string; password?: string; system_prompt?: string } = {
+      const input: { name: string; base_url: string; api_key?: string; password?: string; system_prompt: string | null } = {
         name: form.value.name,
         base_url: form.value.base_url,
+        system_prompt: systemPrompt,
       };
       if (form.value.api_key) input.api_key = form.value.api_key;
       if (form.value.password) input.password = form.value.password;
-      if (systemPrompt) input.system_prompt = systemPrompt;
       await store.createServer(input);
     }
     showDialog.value = false;
