@@ -788,14 +788,17 @@ const tokenUsageServerOptions = computed(() =>
   servers.value.map((s) => ({ label: s.server_name, value: s.server_id })),
 );
 
+const formatCompact = (v: number) =>
+  new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 2 }).format(v);
+
 const tokenUsageColumns = [
   { name: 'server', label: 'Server', field: 'server_name', align: 'left' as const },
   { name: 'model', label: 'Model', field: 'model', align: 'left' as const, format: (v: string | null) => v || '\u2014' },
-  { name: 'input', label: 'Input Tokens', field: 'total_input_tokens', align: 'right' as const, format: (v: number) => v.toLocaleString() },
-  { name: 'output', label: 'Output Tokens', field: 'total_output_tokens', align: 'right' as const, format: (v: number) => v.toLocaleString() },
-  { name: 'cache_creation', label: 'Cache Creation', field: 'total_cache_creation_tokens', align: 'right' as const, format: (v: number) => v.toLocaleString() },
-  { name: 'cache_read', label: 'Cache Read', field: 'total_cache_read_tokens', align: 'right' as const, format: (v: number) => v.toLocaleString() },
-  { name: 'requests', label: 'Requests', field: 'request_count', align: 'right' as const, format: (v: number) => v.toLocaleString() },
+  { name: 'input', label: 'Input Tokens', field: 'total_input_tokens', align: 'right' as const, format: formatCompact },
+  { name: 'output', label: 'Output Tokens', field: 'total_output_tokens', align: 'right' as const, format: formatCompact },
+  { name: 'cache_creation', label: 'Cache W', field: 'total_cache_creation_tokens', align: 'right' as const, format: formatCompact },
+  { name: 'cache_read', label: 'Cache R', field: 'total_cache_read_tokens', align: 'right' as const, format: formatCompact },
+  { name: 'requests', label: 'Requests', field: 'request_count', align: 'right' as const, format: formatCompact },
   { name: 'cost', label: 'Cost ($)', field: 'cost_usd', align: 'right' as const, format: (v: number | null) => v != null ? `$${v.toFixed(4)}` : '\u2014' },
 ];
 
