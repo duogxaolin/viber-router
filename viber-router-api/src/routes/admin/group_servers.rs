@@ -212,7 +212,8 @@ async fn update_assignment(
          rate_cache_write = CASE WHEN $16 THEN $17 ELSE rate_cache_write END, \
          rate_cache_read = CASE WHEN $18 THEN $19 ELSE rate_cache_read END, \
          max_requests = CASE WHEN $20 THEN $21 ELSE max_requests END, \
-         rate_window_seconds = CASE WHEN $22 THEN $23 ELSE rate_window_seconds END \
+         rate_window_seconds = CASE WHEN $22 THEN $23 ELSE rate_window_seconds END, \
+         normalize_cache_read = COALESCE($24, normalize_cache_read) \
          WHERE group_id = $4 AND server_id = $5 RETURNING *",
     )
     .bind(input.priority)
@@ -238,6 +239,7 @@ async fn update_assignment(
     .bind(max_requests_val)
     .bind(update_rate_window)
     .bind(rate_window_val)
+    .bind(input.normalize_cache_read)
     .fetch_optional(&state.db)
     .await
     .map_err(internal)?

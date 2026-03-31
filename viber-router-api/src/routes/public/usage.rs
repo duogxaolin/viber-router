@@ -30,10 +30,8 @@ pub struct PublicUsageResponse {
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ModelUsage {
     model: Option<String>,
-    total_input_tokens: i64,
+    effective_input_tokens: i64,
     total_output_tokens: i64,
-    total_cache_creation_tokens: i64,
-    total_cache_read_tokens: i64,
     request_count: i64,
     cost_usd: Option<f64>,
 }
@@ -121,10 +119,8 @@ pub async fn public_usage(
     // Query usage aggregated by model (no server info), last 30 days
     let usage = sqlx::query_as::<_, ModelUsage>(
         "SELECT model, \
-         COALESCE(SUM(input_tokens), 0)::bigint as total_input_tokens, \
+         (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(cache_creation_tokens), 0) + COALESCE(SUM(cache_read_tokens), 0))::bigint as effective_input_tokens, \
          COALESCE(SUM(output_tokens), 0)::bigint as total_output_tokens, \
-         COALESCE(SUM(cache_creation_tokens), 0)::bigint as total_cache_creation_tokens, \
-         COALESCE(SUM(cache_read_tokens), 0)::bigint as total_cache_read_tokens, \
          COUNT(*)::bigint as request_count, \
          SUM(cost_usd) as cost_usd \
          FROM token_usage_logs \

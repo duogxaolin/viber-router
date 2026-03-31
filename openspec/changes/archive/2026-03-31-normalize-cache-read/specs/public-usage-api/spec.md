@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Public usage endpoint
 The system SHALL expose `GET /api/public/usage?key=<sub-key>` that accepts a sub-key and returns usage and subscription data without admin authentication.

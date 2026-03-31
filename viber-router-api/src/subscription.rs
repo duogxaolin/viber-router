@@ -360,11 +360,16 @@ pub fn calculate_cost(
     output_tokens: i32,
     cache_creation_tokens: Option<i32>,
     cache_read_tokens: Option<i32>,
+    normalize_cache_read: bool,
 ) -> f64 {
     let inp = (input_tokens as f64) * pricing.input_1m_usd * rate_input;
     let out = (output_tokens as f64) * pricing.output_1m_usd * rate_output;
     let cw = (cache_creation_tokens.unwrap_or(0) as f64) * pricing.cache_write_1m_usd * rate_cache_write;
-    let cr = (cache_read_tokens.unwrap_or(0) as f64) * pricing.cache_read_1m_usd * rate_cache_read;
+    let cr = if normalize_cache_read {
+        (cache_read_tokens.unwrap_or(0) as f64) * pricing.input_1m_usd * rate_input
+    } else {
+        (cache_read_tokens.unwrap_or(0) as f64) * pricing.cache_read_1m_usd * rate_cache_read
+    };
     (inp + out + cw + cr) / 1_000_000.0
 }
 

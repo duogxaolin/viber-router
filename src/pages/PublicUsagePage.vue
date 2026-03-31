@@ -309,10 +309,8 @@ function toggleDark() {
 
 interface ModelUsage {
   model: string | null;
-  total_input_tokens: number;
+  effective_input_tokens: number;
   total_output_tokens: number;
-  total_cache_creation_tokens: number;
-  total_cache_read_tokens: number;
   request_count: number;
   cost_usd: number | null;
 }
@@ -408,10 +406,8 @@ const formatCompact = (v: number) =>
 
 const usageColumns = [
   { name: 'model', label: 'Model', field: 'model', align: 'left' as const, format: (v: string | null) => v || '\u2014' },
-  { name: 'input', label: 'Input', field: 'total_input_tokens', align: 'right' as const, format: formatCompact },
+  { name: 'input', label: 'Input', field: 'effective_input_tokens', align: 'right' as const, format: formatCompact },
   { name: 'output', label: 'Output', field: 'total_output_tokens', align: 'right' as const, format: formatCompact },
-  { name: 'cache_creation', label: 'Cache W', field: 'total_cache_creation_tokens', align: 'right' as const, format: formatCompact },
-  { name: 'cache_read', label: 'Cache R', field: 'total_cache_read_tokens', align: 'right' as const, format: formatCompact },
   { name: 'requests', label: 'Requests', field: 'request_count', align: 'right' as const, format: formatCompact },
   { name: 'cost', label: 'Cost ($)', field: 'cost_usd', align: 'right' as const, format: (v: number | null) => v != null ? `$${v.toFixed(4)}` : '\u2014' },
 ];

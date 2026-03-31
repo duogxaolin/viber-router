@@ -595,6 +595,7 @@
             <q-input v-model.number="rateForm.rate_output" label="Output Rate" outlined dense type="number" :min="0" placeholder="1.0" clearable @clear="rateForm.rate_output = null" />
             <q-input v-model.number="rateForm.rate_cache_write" label="Cache Write Rate" outlined dense type="number" :min="0" placeholder="1.0" clearable @clear="rateForm.rate_cache_write = null" />
             <q-input v-model.number="rateForm.rate_cache_read" label="Cache Read Rate" outlined dense type="number" :min="0" placeholder="1.0" clearable @clear="rateForm.rate_cache_read = null" />
+            <q-toggle v-model="rateForm.normalize_cache_read" label="Normalize Cache Read" dense />
           </q-card-section>
           <q-card-actions align="right">
             <q-btn flat label="Cancel" v-close-popup />
@@ -760,6 +761,7 @@ const rateForm = ref({
   rate_output: null as number | null,
   rate_cache_write: null as number | null,
   rate_cache_read: null as number | null,
+  normalize_cache_read: false,
 });
 
 // Allowed models state
@@ -1560,6 +1562,7 @@ function openRateModal(s: GroupServerDetail) {
     rate_output: s.rate_output,
     rate_cache_write: s.rate_cache_write,
     rate_cache_read: s.rate_cache_read,
+    normalize_cache_read: s.normalize_cache_read,
   };
   showRateModal.value = true;
 }
@@ -1579,6 +1582,7 @@ async function onSaveRates() {
       rate_output: rateForm.value.rate_output,
       rate_cache_write: rateForm.value.rate_cache_write,
       rate_cache_read: rateForm.value.rate_cache_read,
+      normalize_cache_read: rateForm.value.normalize_cache_read,
     });
     showRateModal.value = false;
     await loadGroup();

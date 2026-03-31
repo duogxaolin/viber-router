@@ -18,6 +18,7 @@ pub struct GroupServer {
     pub rate_cache_read: Option<f64>,
     pub max_requests: Option<i32>,
     pub rate_window_seconds: Option<i32>,
+    pub normalize_cache_read: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -41,6 +42,8 @@ pub struct GroupServerDetail {
     pub rate_cache_read: Option<f64>,
     pub max_requests: Option<i32>,
     pub rate_window_seconds: Option<i32>,
+    #[serde(default)]
+    pub normalize_cache_read: bool,
 }
 
 /// Admin-facing server detail with rate fields (not used in proxy cache)
@@ -63,6 +66,7 @@ pub struct AdminGroupServerDetail {
     pub rate_cache_read: Option<f64>,
     pub max_requests: Option<i32>,
     pub rate_window_seconds: Option<i32>,
+    pub normalize_cache_read: bool,
     pub password_hash: Option<String>,
 }
 
@@ -87,6 +91,7 @@ pub struct UpdateAssignment {
     pub rate_cache_read: Option<Option<f64>>,
     pub max_requests: Option<Option<i32>>,
     pub rate_window_seconds: Option<Option<i32>>,
+    pub normalize_cache_read: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

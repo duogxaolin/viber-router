@@ -120,7 +120,7 @@ async fn resolve_group_config(state: &AppState, api_key: &str) -> Option<GroupCo
         "SELECT gs.server_id, s.short_id, s.name as server_name, s.base_url, s.api_key, s.system_prompt, gs.priority, gs.model_mappings, gs.is_enabled, \
          gs.cb_max_failures, gs.cb_window_seconds, gs.cb_cooldown_seconds, \
          gs.rate_input, gs.rate_output, gs.rate_cache_write, gs.rate_cache_read, \
-         gs.max_requests, gs.rate_window_seconds \
+         gs.max_requests, gs.rate_window_seconds, gs.normalize_cache_read \
          FROM group_servers gs JOIN servers s ON s.id = gs.server_id \
          WHERE gs.group_id = $1 AND gs.is_enabled = true ORDER BY gs.priority",
     )
@@ -1103,6 +1103,7 @@ async fn proxy_handler(
                                 let cost = crate::subscription::calculate_cost(
                                     pricing, ri, ro, rcw, rcr,
                                     inp, out, cache_creation, cache_read,
+                                    server.normalize_cache_read,
                                 );
                                 drop(pricing_cache);
 
@@ -1260,6 +1261,7 @@ async fn proxy_handler(
                             server.rate_output.unwrap_or(1.0),
                             server.rate_cache_write.unwrap_or(1.0),
                             server.rate_cache_read.unwrap_or(1.0),
+                            server.normalize_cache_read,
                         ))
                     } else {
                         Body::from_stream(combined)
@@ -1348,6 +1350,7 @@ async fn proxy_handler(
                             server.rate_output.unwrap_or(1.0),
                             server.rate_cache_write.unwrap_or(1.0),
                             server.rate_cache_read.unwrap_or(1.0),
+                            server.normalize_cache_read,
                         ))
                     } else {
                         Body::from_stream(combined)
@@ -1462,6 +1465,7 @@ struct UsageTrackingStream<S> {
     rate_output: f64,
     rate_cache_write: f64,
     rate_cache_read: f64,
+    normalize_cache_read: bool,
     done: bool,
 }
 
@@ -1505,6 +1509,7 @@ where
                     let rate_output = this.rate_output;
                     let rate_cache_write = this.rate_cache_write;
                     let rate_cache_read = this.rate_cache_read;
+                    let normalize_cache_read = this.normalize_cache_read;
                     let input_tokens = usage.input_tokens;
                     let output_tokens = usage.output_tokens;
                     let cache_creation_tokens = usage.cache_creation_tokens;
@@ -1521,6 +1526,7 @@ where
                                     rate_cache_write, rate_cache_read,
                                     input_tokens, output_tokens,
                                     cache_creation_tokens, cache_read_tokens,
+                                    normalize_cache_read,
                                 );
                                 drop(pricing_cache);
 
@@ -1598,6 +1604,7 @@ fn wrap_stream_with_usage_tracking<S>(
     rate_output: f64,
     rate_cache_write: f64,
     rate_cache_read: f64,
+    normalize_cache_read: bool,
 ) -> UsageTrackingStream<S>
 where
     S: futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
@@ -1617,6 +1624,7 @@ where
         rate_output,
         rate_cache_write,
         rate_cache_read,
+        normalize_cache_read,
         done: false,
     }
 }

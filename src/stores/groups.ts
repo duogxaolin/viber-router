@@ -43,6 +43,7 @@ export interface GroupServerDetail {
   rate_cache_read: number | null;
   max_requests: number | null;
   rate_window_seconds: number | null;
+  normalize_cache_read: boolean;
   password_hash: string | null;
 }
 
@@ -201,6 +202,7 @@ export const useGroupsStore = defineStore('groups', () => {
       rate_cache_read?: number | null;
       max_requests?: number | null;
       rate_window_seconds?: number | null;
+      normalize_cache_read?: boolean;
     },
   ) {
     await api.put(`/api/admin/groups/${groupId}/servers/${serverId}`, input);
