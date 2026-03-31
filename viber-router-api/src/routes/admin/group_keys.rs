@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::models::{CreateGroupKey, GroupKey, PaginatedResponse, UpdateGroupKey, generate_api_key};
+use crate::models::{CreateGroupKey, GroupKey, PaginatedResponse, SubscriptionPlan, UpdateGroupKey, generate_api_key};
 use crate::routes::AppState;
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
@@ -27,9 +27,17 @@ pub struct ListParams {
     pub search: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BulkCreateKeys {
+    pub count: u32,
+    pub plan_id: Uuid,
+    pub name_prefix: Option<String>,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_keys).post(create_key))
+        .route("/bulk", post(bulk_create_keys))
         .route("/{key_id}", patch(update_key))
         .route("/{key_id}/regenerate", post(regenerate_key))
         .nest("/{key_id}/allowed-models", super::group_key_allowed_models::router())
@@ -70,6 +78,86 @@ async fn create_key(
     Ok((StatusCode::CREATED, Json(key)))
 }
 
+async fn bulk_create_keys(
+    State(state): State<AppState>,
+    Path(group_id): Path<Uuid>,
+    Json(input): Json<BulkCreateKeys>,
+) -> Result<(StatusCode, Json<Vec<GroupKey>>), ApiError> {
+    if input.count == 0 || input.count > 500 {
+        return Err(err(StatusCode::BAD_REQUEST, "Count must be between 1 and 500"));
+    }
+
+    // Verify group exists
+    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM groups WHERE id = $1)")
+        .bind(group_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(internal)?;
+    if !exists {
+        return Err(err(StatusCode::NOT_FOUND, "Group not found"));
+    }
+
+    // Fetch and validate plan
+    let plan = sqlx::query_as::<_, SubscriptionPlan>(
+        "SELECT * FROM subscription_plans WHERE id = $1",
+    )
+    .bind(input.plan_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Plan not found"))?;
+
+    if !plan.is_active {
+        return Err(err(StatusCode::BAD_REQUEST, "Plan is not active"));
+    }
+
+    let mut tx = state.db.begin().await.map_err(internal)?;
+    let mut created_keys: Vec<GroupKey> = Vec::with_capacity(input.count as usize);
+
+    for i in 1..=input.count {
+        let name = match &input.name_prefix {
+            Some(prefix) if !prefix.is_empty() => format!("{}-{}-{}", prefix, plan.name, i),
+            _ => format!("{}-{}", plan.name, i),
+        };
+
+        if name.len() > 100 {
+            return Err(err(StatusCode::BAD_REQUEST, "Generated key name exceeds 100 characters. Use a shorter prefix or plan name."));
+        }
+
+        let api_key = generate_api_key();
+        let key = sqlx::query_as::<_, GroupKey>(
+            "INSERT INTO group_keys (group_id, api_key, name) VALUES ($1, $2, $3) RETURNING *",
+        )
+        .bind(group_id)
+        .bind(&api_key)
+        .bind(&name)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(internal)?;
+
+        sqlx::query(
+            "INSERT INTO key_subscriptions (group_key_id, plan_id, sub_type, cost_limit_usd, model_limits, reset_hours, duration_days, rpm_limit) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(key.id)
+        .bind(plan.id)
+        .bind(&plan.sub_type)
+        .bind(plan.cost_limit_usd)
+        .bind(&plan.model_limits)
+        .bind(plan.reset_hours)
+        .bind(plan.duration_days)
+        .bind(plan.rpm_limit)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+
+        created_keys.push(key);
+    }
+
+    tx.commit().await.map_err(internal)?;
+
+    Ok((StatusCode::CREATED, Json(created_keys)))
+}
 
 async fn list_keys(
     State(state): State<AppState>,

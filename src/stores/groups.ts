@@ -276,6 +276,14 @@ export const useGroupsStore = defineStore('groups', () => {
     return data;
   }
 
+  async function bulkCreateGroupKeys(
+    groupId: string,
+    input: { count: number; plan_id: string; name_prefix?: string },
+  ) {
+    const { data } = await api.post<GroupKey[]>(`/api/admin/groups/${groupId}/keys/bulk`, input);
+    return data;
+  }
+
   async function fetchKeyUsage(
     groupId: string,
     groupKeyId: string,
@@ -320,7 +328,7 @@ export const useGroupsStore = defineStore('groups', () => {
     bulkActivate, bulkDeactivate, bulkDelete, bulkAssignServer,
     assignServer, updateAssignment, removeServer, reorderServers,
     fetchTtftStats, fetchCircuitStatus, fetchTokenUsageStats,
-    fetchGroupKeys, createGroupKey, updateGroupKey, regenerateGroupKey, fetchKeyUsage,
+    fetchGroupKeys, createGroupKey, updateGroupKey, regenerateGroupKey, bulkCreateGroupKeys, fetchKeyUsage,
     fetchGroupAllowedModels, addGroupAllowedModel, removeGroupAllowedModel,
     fetchKeyAllowedModels, addKeyAllowedModel, removeKeyAllowedModel,
   };

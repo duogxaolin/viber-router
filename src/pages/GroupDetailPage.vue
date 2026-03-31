@@ -180,6 +180,7 @@
                 <q-space />
                 <q-input v-model="subKeySearch" placeholder="Search by name or key" outlined dense clearable style="max-width: 250px" class="q-mr-sm" @update:model-value="loadSubKeys" />
                 <q-btn color="primary" dense label="Create Key" @click="showCreateKey = true" />
+                <q-btn flat dense icon="playlist_add" label="Bulk Create" color="secondary" class="q-ml-xs" @click="openBulkCreate" />
               </div>
               <div v-if="subKeysLoading && !subKeys.length" class="flex flex-center q-pa-lg"><q-spinner size="md" /></div>
               <q-banner v-else-if="subKeyError" class="bg-negative text-white q-mb-sm" rounded>
@@ -587,6 +588,71 @@
         </q-card>
       </q-dialog>
 
+      <!-- Bulk Create Keys Dialog -->
+      <q-dialog v-model="showBulkCreate" persistent>
+        <q-card style="min-width: 380px">
+          <q-card-section class="row items-center q-pb-none">
+            <div class="text-h6">Bulk Create Sub-Keys</div>
+            <q-space />
+            <q-btn icon="close" flat round dense v-close-popup />
+          </q-card-section>
+          <q-card-section class="q-gutter-sm">
+            <q-select
+              v-model="bulkCreateForm.plan_id"
+              :options="activePlans.map((p) => ({ label: `${p.name} · ${getSubTypeLabel(p.sub_type)} · $${p.cost_limit_usd.toFixed(2)}`, value: p.id }))"
+              label="Plan *"
+              emit-value
+              map-options
+              outlined
+              dense
+            />
+            <q-input
+              v-model.number="bulkCreateForm.count"
+              label="Count *"
+              type="number"
+              outlined
+              dense
+              :rules="[(v) => (v >= 1 && v <= 500) || 'Must be 1–500']"
+            />
+            <q-input
+              v-model="bulkCreateForm.name_prefix"
+              label="Name prefix (optional)"
+              outlined
+              dense
+              hint="e.g. 'team-a' → team-a-PlanName-1, team-a-PlanName-2, ..."
+            />
+          </q-card-section>
+          <q-card-actions align="right">
+            <q-btn flat label="Cancel" v-close-popup />
+            <q-btn
+              label="Create"
+              color="primary"
+              :loading="bulkCreating"
+              :disable="!bulkCreateForm.plan_id || bulkCreateForm.count < 1 || bulkCreateForm.count > 500"
+              @click="onBulkCreate"
+            />
+          </q-card-actions>
+        </q-card>
+      </q-dialog>
+
+      <!-- Bulk Create Result Dialog -->
+      <q-dialog v-model="showBulkResult">
+        <q-card style="min-width: 340px">
+          <q-card-section class="row items-center q-pb-none">
+            <div class="text-h6">Keys Created</div>
+            <q-space />
+            <q-btn icon="close" flat round dense v-close-popup />
+          </q-card-section>
+          <q-card-section>
+            <div class="text-body2">{{ bulkCreatedKeys.length }} sub-keys created successfully.</div>
+          </q-card-section>
+          <q-card-actions align="right">
+            <q-btn flat label="Close" v-close-popup />
+            <q-btn label="Download CSV" color="primary" icon="download" @click="downloadBulkCsv" />
+          </q-card-actions>
+        </q-card>
+      </q-dialog>
+
       <q-dialog v-model="showRateModal">
         <q-card style="width: 400px">
           <q-card-section><div class="text-h6">Cost Rates — {{ rateEditServer?.server_name }}</div></q-card-section>
@@ -693,6 +759,12 @@ const subKeyPagination = ref({ page: 1, rowsPerPage: 50, rowsNumber: 0, sortBy: 
 const showCreateKey = ref(false);
 const newKeyName = ref('');
 const creatingKey = ref(false);
+
+const showBulkCreate = ref(false);
+const bulkCreateForm = ref({ plan_id: '', count: 10, name_prefix: '' });
+const bulkCreating = ref(false);
+const bulkCreatedKeys = ref<GroupKey[]>([]);
+const showBulkResult = ref(false);
 
 // Subscription state
 interface KeySubscription {
@@ -1008,6 +1080,52 @@ async function onCreateKey() {
   } finally {
     creatingKey.value = false;
   }
+}
+
+function openBulkCreate() {
+  showBulkCreate.value = true;
+  loadActivePlans();
+}
+
+async function onBulkCreate() {
+  if (!group.value || !bulkCreateForm.value.plan_id || bulkCreateForm.value.count < 1) return;
+  bulkCreating.value = true;
+  try {
+    const payload: { count: number; plan_id: string; name_prefix?: string } = {
+      count: bulkCreateForm.value.count,
+      plan_id: bulkCreateForm.value.plan_id,
+    };
+    if (bulkCreateForm.value.name_prefix.trim()) {
+      payload.name_prefix = bulkCreateForm.value.name_prefix.trim();
+    }
+    bulkCreatedKeys.value = await groupsStore.bulkCreateGroupKeys(group.value.id, payload);
+    showBulkCreate.value = false;
+    showBulkResult.value = true;
+    loadSubKeys();
+  } catch (e: unknown) {
+    const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to bulk create keys';
+    $q.notify({ type: 'negative', message: msg });
+  } finally {
+    bulkCreating.value = false;
+  }
+}
+
+function downloadBulkCsv() {
+  const baseUrl = window.location.origin;
+  const rows = [
+    'api_key,base_url,dashboard_url',
+    ...bulkCreatedKeys.value.map((k) => {
+      const dashboardUrl = `${baseUrl}/#/usage/${encodeURIComponent(k.api_key)}`;
+      return `${k.api_key},${baseUrl},${dashboardUrl}`;
+    }),
+  ];
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'sub-keys.csv';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 async function toggleSubKey(row: GroupKey, val: boolean) {
