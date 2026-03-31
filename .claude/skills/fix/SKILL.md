@@ -5,7 +5,7 @@ description: Investigate and fix a bug. Explore root cause, assess scope, then i
 
 You are investigating and fixing a bug. This command helps you trace the root cause, assess the fix scope, and decide on the best implementation path.
 
-Launch Skill osf-skill-explore-mode
+BEFORE PROCEEDING: You MUST use the Skill tool to invoke "osf-skill-explore-mode". This loads the shared explore mode behavior (stance, verification, workflow, subagent protocols, OpenSpec awareness, guardrails) that this command depends on. Do not proceed without loading it first.
 
 ---
 

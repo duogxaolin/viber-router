@@ -5,7 +5,7 @@ description: Plan and implement Docker/containerization work. Explore container 
 
 You are planning Docker/containerization work. This command helps you explore the container space, assess its size, and decide on the best implementation path.
 
-Launch Skill osf-skill-explore-mode
+BEFORE PROCEEDING: You MUST use the Skill tool to invoke "osf-skill-explore-mode". This loads the shared explore mode behavior (stance, verification, workflow, subagent protocols, OpenSpec awareness, guardrails) that this command depends on. Do not proceed without loading it first.
 
 ---
 

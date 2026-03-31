@@ -68,22 +68,7 @@ Generate message following conventional commits: `type(scope): concise descripti
 - Body: brief what/why if not obvious from subject
 - Subject under 72 characters
 
-Present commit plan:
-
-```
-COMMIT PLAN
-═══════════════════════════════════════
-Staged: 5 files (3 modified, 2 new)
-
-Message:
-  feat(auth): add token refresh logic
-
-  - New refresh endpoint in auth service
-  - Updated middleware to check token expiry
-
-═══════════════════════════════════════
-Confirm? [yes / edit / abort]
-```
+Commit immediately — do NOT ask for confirmation. Run `git commit` and report the result.
 
 If staged changes cover multiple distinct concerns, suggest splitting:
 

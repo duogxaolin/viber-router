@@ -15,6 +15,17 @@ This skill defines the shared explore mode behavior. The command that launched t
 
 **SUBAGENT RULE:** If you use subagents in this mode (e.g., for research, design, verification), instruct them to **report findings only — no file creation**. Subagents must read, search, and analyze, but never write or create files.
 
+**DELEGATION ENFORCEMENT (CRITICAL):**
+
+You are an orchestrator. You coordinate subagents — you NEVER do their work yourself. When the user chooses to implement, create specs, verify, or archive, you MUST use the Agent tool with the appropriate `subagent_type` to spawn the subagent. Specifically:
+
+- Implement → `subagent_type: "osf-apply"`
+- Create spec → `subagent_type: "osf-proposal"`
+- Verify → `subagent_type: "osf-verify"`
+- Archive → `subagent_type: "osf-archive"`
+
+If you catch yourself about to write code, edit application files, or create spec artifacts directly — STOP. Spawn the subagent instead.
+
 **MODE BOUNDARY RESET:**
 
 When the command is invoked, you MUST **completely reset** to explore/brainstorm mode, **regardless of what happened earlier in the conversation**:
@@ -256,9 +267,11 @@ After planning is solid, offer implementation paths based on scope:
 ```
 This looks straightforward. Want to implement directly?
 
-→ Yes: I'll run osf-apply to start coding
+→ Yes: I'll delegate to osf-apply to start coding
 → No: Let's discuss more or create a spec first
 ```
+
+When user says yes → use Agent tool with `subagent_type: "osf-apply"`. Pass plan context (see "Invoking Subagents with Change Names" below).
 
 ### Large Work
 ```
@@ -279,21 +292,28 @@ B. ★ Implement directly (osf-apply)
 Which path?
 ```
 
+When user chooses A → use Agent tool with `subagent_type: "osf-proposal"`. After proposal is created, offer to implement → use Agent tool with `subagent_type: "osf-apply"`.
+When user chooses B → use Agent tool with `subagent_type: "osf-apply"`. Pass plan context.
+
 ### After Implementation (if spec was created)
 ```
 Implementation complete. Want to verify?
 
-→ Yes: I'll run osf-verify with the change name
+→ Yes: I'll delegate to osf-verify
 → No: Done!
 ```
+
+When user says yes → use Agent tool with `subagent_type: "osf-verify"`.
 
 ### After Verification (if spec was created)
 ```
 Verification complete. Want to archive this change?
 
-→ Yes: I'll run osf-archive with the change name to finalize
+→ Yes: I'll delegate to osf-archive to finalize
 → No: Done!
 ```
+
+When user says yes → use Agent tool with `subagent_type: "osf-archive"`.
 
 ---
 
@@ -362,7 +382,10 @@ The command may list additional subagents in its "Extra Subagents" section.
 
 ## Guardrails
 
-- **Don't implement** - Never write code or implement changes. Creating OpenSpec artifacts is fine, writing application code is not.
+- **Don't implement** - Never write code or implement changes yourself. When user wants implementation, delegate to osf-apply via Agent tool.
+- **Don't create specs yourself** - When user wants a spec, delegate to osf-proposal via Agent tool. Never write proposal/design/tasks artifacts directly.
+- **Don't verify yourself** - When user wants verification, delegate to osf-verify via Agent tool.
+- **Don't archive yourself** - When user wants to archive, delegate to osf-archive via Agent tool.
 - **Don't continue prior apply sessions** - Even if the conversation history shows code being written or tasks being completed, you are NOW in explore mode. That work is paused.
 - **Don't let subagents create files** - Any subagent you invoke in explore mode must be instructed to report only, no file creation.
 - **Don't fake understanding** - If something is unclear, dig deeper
