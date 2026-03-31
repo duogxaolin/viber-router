@@ -202,6 +202,26 @@ If the user mentions a change or you detect one is relevant:
 
 ---
 
+## Stress-test Protocol
+
+The command's Stress-test Questions are a self-check list — NOT a user questionnaire.
+
+For each item:
+1. Explore the codebase to find the answer yourself
+2. Feynman check: explain your answer in one sentence. Can't simplify it? That's a real gap.
+3. Classify:
+   - ✅ Self-resolved (found in code, can explain clearly) → state finding, don't ask
+   - 🎨 Style choice (multiple valid options, no objective winner for this project) → ask with options
+   - ❓ Genuine confusion (can't determine from code, can't explain why one option fits) → ask with your confusion + options
+
+Only surface 🎨 and ❓ items to the user. Weave ✅ findings into the teach-back naturally.
+
+When presenting options to the user: explain each option in the user's language using Feynman Technique — one simple sentence on what's good, one on what's bad. No jargon. The user should understand the tradeoff without needing to look anything up.
+
+If you're about to ask the user more than 3 questions, you haven't explored enough. Go back and investigate.
+
+---
+
 ## Ending Discovery
 
 ### Teach-back (Feynman check)
@@ -292,10 +312,18 @@ B. ★ Implement directly (osf-apply)
 Which path?
 ```
 
-When user chooses A → use Agent tool with `subagent_type: "osf-proposal"`. After proposal is created, offer to implement → use Agent tool with `subagent_type: "osf-apply"`.
+When user chooses A → use Agent tool with `subagent_type: "osf-proposal"`. After proposal completes, immediately run osf-apply with the change name — do NOT ask. Use Agent tool with `subagent_type: "osf-apply"`.
 When user chooses B → use Agent tool with `subagent_type: "osf-apply"`. Pass plan context.
 
-### After Implementation (if spec was created)
+### After Implementation
+
+Decide whether to auto-verify based on your understanding of the work that was just implemented. Consider the scope, the risk profile, how many moving parts interact, whether behavior must be preserved, and whether mistakes would be costly or hard to spot.
+
+If you judge the work warrants verification — run osf-verify immediately. Tell the user why in one line:
+  "Auto-verifying — [your reason]"
+Then use Agent tool with `subagent_type: "osf-verify"`.
+
+If you judge the work is simple and low-risk — ask:
 ```
 Implementation complete. Want to verify?
 
@@ -402,7 +430,7 @@ The command may list additional subagents in its "Extra Subagents" section.
 - **Do explore the codebase** - Ground discussions in reality
 - **Do question assumptions** - Including the user's and your own
 - **Do auto-explore gaps** - If you find missing info, explore it immediately
-- **Do stress-test before ending** - Run through the command's proactive checklist before declaring ready
+- **Do stress-test before ending** - Run through the command's stress-test items using the Stress-test Protocol (self-answer first, only surface gaps)
 - **Do offer implementation options** - After planning is solid, offer clear paths: small (direct apply), large (proposal + apply), or discuss more
 - **Do keep workflow fluid** - User can go back to plan, switch paths, or pause anytime. No linear lock-in.
 - **Do redirect to other commands** - If user wants a different type of work, suggest the appropriate command: `/feat`, `/fix`, `/chore`, `/refactor`, `/perf`, `/docs`, `/test`, `/ci`, `/docker`

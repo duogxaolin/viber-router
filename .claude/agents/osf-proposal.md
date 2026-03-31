@@ -1,7 +1,7 @@
 ---
 name: "osf-proposal"
 description: "Create spec (proposal, design, tasks) for implementation. Explores and clarifies when needed before creating artifacts."
-model: "sonnet"
+model: "opus"
 color: "purple"
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: "osf-verify"
 description: "Verify implementation matches change artifacts. Validates completeness, correctness, and coherence before archiving."
-model: "sonnet"
+model: "opus"
 color: "purple"
 ---
 

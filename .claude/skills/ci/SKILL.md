@@ -57,7 +57,7 @@ BEFORE PROCEEDING: You MUST use the Skill tool to invoke "osf-skill-explore-mode
 
 ## Stress-test Questions
 
-Before ending discovery, ask user about these with concrete options:
+Resolve these before ending discovery. Self-answer by exploring the codebase. Only surface items to the user that are genuinely ambiguous or require a personal/team style choice:
 
 1. Pipeline scope:
    "What's being automated:

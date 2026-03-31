@@ -1,7 +1,7 @@
 ---
 name: "osf-apply"
 description: "Implement tasks from OpenSpec change or conversation plan. Writes code, completes tasks, modifies files."
-model: "sonnet"
+model: "opus"
 color: "purple"
 ---
 
