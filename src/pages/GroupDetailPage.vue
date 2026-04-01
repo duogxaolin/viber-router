@@ -114,6 +114,9 @@
                       <q-badge v-if="s.max_requests != null && s.rate_window_seconds != null" outline color="purple" class="q-ml-sm" :aria-label="`Rate limit: ${s.max_requests} requests per ${s.rate_window_seconds} seconds`">
                         {{ s.max_requests }}/{{ s.rate_window_seconds }}s
                       </q-badge>
+                      <q-badge v-if="s.max_input_tokens != null" outline color="teal" class="q-ml-sm" :aria-label="`Max input tokens: ${s.max_input_tokens}`">
+                        ≤{{ formatTokenThreshold(s.max_input_tokens) }} tokens
+                      </q-badge>
                     </q-item-label>
                     <q-item-label caption>
                       <template v-if="serversStore.isProtected(s.server_id) && !serversStore.isUnlocked(s.server_id)">
@@ -567,6 +570,21 @@
               class="q-mb-sm"
               @clear="onRlFieldClear()"
             />
+            <div class="text-subtitle2 q-mt-md q-mb-xs">Max Input Tokens</div>
+            <div class="text-caption text-grey q-mb-sm">
+              Skip this server when the estimated input token count exceeds this limit (approximate). Leave empty to disable.
+            </div>
+            <q-input
+              v-model.number="editServerTokenForm.max_input_tokens"
+              label="Max Input Tokens"
+              type="number"
+              :min="1"
+              outlined
+              dense
+              clearable
+              class="q-mb-sm"
+              @clear="editServerTokenForm.max_input_tokens = null"
+            />
           </q-card-section>
           <q-card-actions align="right">
             <q-btn flat label="Cancel" v-close-popup />
@@ -729,6 +747,9 @@ const editServerCbForm = ref({
 const editServerRlForm = ref({
   max_requests: null as number | null,
   rate_window_seconds: null as number | null,
+});
+const editServerTokenForm = ref({
+  max_input_tokens: null as number | null,
 });
 const savingServer = ref(false);
 
@@ -1396,6 +1417,9 @@ function doOpenEditServer(s: GroupServerDetail) {
     max_requests: s.max_requests,
     rate_window_seconds: s.rate_window_seconds,
   };
+  editServerTokenForm.value = {
+    max_input_tokens: s.max_input_tokens,
+  };
   showEditServer.value = true;
 }
 
@@ -1442,6 +1466,7 @@ async function onSaveEditServer() {
         cb_cooldown_seconds: editServerCbForm.value.cb_cooldown_seconds,
         max_requests: editServerRlForm.value.max_requests,
         rate_window_seconds: editServerRlForm.value.rate_window_seconds,
+        max_input_tokens: editServerTokenForm.value.max_input_tokens,
       });
     }
     showEditServer.value = false;
@@ -1662,6 +1687,12 @@ function hasNonDefaultRate(s: GroupServerDetail): boolean {
   return [s.rate_input, s.rate_output, s.rate_cache_write, s.rate_cache_read].some(
     (r) => r !== null && r !== undefined && r !== 1.0,
   );
+}
+
+function formatTokenThreshold(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}K`;
+  return String(n);
 }
 
 function displayRate(s: GroupServerDetail): string {

@@ -120,7 +120,7 @@ async fn resolve_group_config(state: &AppState, api_key: &str) -> Option<GroupCo
         "SELECT gs.server_id, s.short_id, s.name as server_name, s.base_url, s.api_key, s.system_prompt, gs.priority, gs.model_mappings, gs.is_enabled, \
          gs.cb_max_failures, gs.cb_window_seconds, gs.cb_cooldown_seconds, \
          gs.rate_input, gs.rate_output, gs.rate_cache_write, gs.rate_cache_read, \
-         gs.max_requests, gs.rate_window_seconds, gs.normalize_cache_read \
+         gs.max_requests, gs.rate_window_seconds, gs.normalize_cache_read, gs.max_input_tokens \
          FROM group_servers gs JOIN servers s ON s.id = gs.server_id \
          WHERE gs.group_id = $1 AND gs.is_enabled = true ORDER BY gs.priority",
     )
@@ -269,6 +269,27 @@ fn extract_request_model(body: &[u8]) -> Option<String> {
     serde_json::from_slice::<Value>(body)
         .ok()
         .and_then(|v| v.get("model")?.as_str().map(String::from))
+}
+
+/// Estimate the number of input tokens for a request body.
+/// Strips image content blocks from messages, serializes the result, and divides the byte length by 4.
+/// Returns None if the body is not valid JSON (fail open).
+fn estimate_input_tokens(body: &[u8]) -> Option<usize> {
+    let mut json: Value = serde_json::from_slice(body).ok()?;
+
+    // Strip image content blocks from each message's content array
+    if let Some(messages) = json.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        for msg in messages.iter_mut() {
+            if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
+                content.retain(|block| {
+                    block.get("type").and_then(|t| t.as_str()) != Some("image")
+                });
+            }
+        }
+    }
+
+    let filtered = serde_json::to_string(&json).ok()?;
+    Some(filtered.len() / 4)
 }
 
 /// Check if a system array has cache_control metadata in any block.
@@ -505,6 +526,9 @@ async fn proxy_handler(
     let request_path = original_uri.path().to_string();
     let request_method = method.to_string();
     let loop_start = std::time::Instant::now();
+
+    // Estimate input tokens once before the failover loop (used for max_input_tokens skip)
+    let estimated_tokens: Option<usize> = estimate_input_tokens(&body_bytes);
 
     // Model allowlist validation
     if !config.allowed_models.is_empty() {
@@ -765,6 +789,14 @@ async fn proxy_handler(
         {
             any_rate_limited = true;
             continue; // Skip rate-limited server
+        }
+
+        // Max input tokens: skip server if estimated tokens exceed configured threshold
+        if let Some(limit) = server.max_input_tokens
+            && let Some(est) = estimated_tokens
+            && est > limit as usize
+        {
+            continue; // Skip server whose token threshold is exceeded
         }
 
         any_server_attempted = true;
