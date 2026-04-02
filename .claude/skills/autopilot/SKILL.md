@@ -5,12 +5,23 @@ description: Autonomous pipeline — assesses work complexity, then runs the app
 
 You are an autonomous orchestrator. You take a user request and drive it through the full development pipeline without stopping for confirmation.
 
-BEFORE PROCEEDING: You MUST use the Skill tool to invoke "osf-skill-explore-mode". This loads the shared behavior (delegation enforcement, subagent table, OpenSpec awareness, guardrails) that this command depends on. Do not proceed without loading it first.
+## STEP 0: LOAD SKILLS (MANDATORY — DO THIS FIRST)
 
-**AUTOPILOT OVERRIDES** — These override the interactive parts of osf-skill-explore-mode:
+Before you read any code, before you explore anything, before you do ANYTHING else:
+
+1. Classify the work type from the user's request: feat, fix, chore, refactor, perf, docs, test, ci, docker
+2. Announce: "Autopilot: classifying as **[type]**"
+3. Use the Skill tool to invoke the classified domain command (e.g., skill: "feat" or skill: "chore")
+4. Use the Skill tool to invoke "osf-skill-explore-mode"
+
+You MUST make these two Skill tool calls before proceeding. If you find yourself reading code or exploring the codebase without having made these calls, STOP and make them now.
+
+---
+
+**AUTOPILOT OVERRIDES** — These override the interactive parts of the loaded skills:
 - You do NOT ask the user questions during exploration. Make all decisions autonomously.
-- You do NOT present "Ready to Implement" options. After exploration, go straight to pipeline.
-- You do NOT ask about verify or archive. Run the full pipeline without stops.
+- You do NOT present "Ready to Implement" options. After exploration, go straight to pipeline assessment.
+- You do NOT ask about verify or archive. Run the selected pipeline without stops.
 - Continuous Verification still applies — but you self-resolve everything, never surface to user.
 - Stress-test Protocol still applies — but ALL items are self-resolved (no 🎨 or ❓ surfaced).
 
@@ -33,14 +44,7 @@ To detect: if the conversation contains a prior planning session (from `/feat`, 
 
 ## Autonomous Exploration (Mode A only)
 
-### 1. Classify and Load Domain Skill
-
-Determine work type from the request: feat, fix, chore, refactor, perf, docs, test, ci, docker.
-Announce: "Autopilot: classifying as **[type]**"
-
-Then use the Skill tool to invoke the matching domain command (e.g., "feat", "fix", "chore"). This loads domain-specific guidance: stress-test questions, zero-fog checklist, "What You Might Do" strategies.
-
-### 2. Deep Explore
+### 1. Deep Explore
 
 Same depth as interactive brainstorm. Use the loaded domain skill's guidance:
 - Follow "What You Might Do" strategies from the domain skill
@@ -49,7 +53,7 @@ Same depth as interactive brainstorm. Use the loaded domain skill's guidance:
 - Trace execution flows relevant to the request
 - Surface hidden complexity, edge cases, error paths
 
-### 3. Make All Decisions
+### 2. Make All Decisions
 
 For every ambiguity or decision point:
 - **First**: check existing codebase patterns and follow them
@@ -58,14 +62,14 @@ For every ambiguity or decision point:
 
 Never stop to ask the user. Decide and move on.
 
-### 4. Self-Validate
+### 3. Self-Validate
 
 Run through the domain skill's stress-test questions — self-resolve ALL of them.
 Run through the domain skill's zero-fog checklist + shared zero-fog checklist.
 
 If any check fails → explore deeper until it passes.
 
-### 5. Produce Plan Summary
+### 4. Produce Plan Summary
 
 Announce to user:
 ```
