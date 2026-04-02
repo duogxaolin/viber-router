@@ -127,7 +127,14 @@ Immediately use Agent tool with `subagent_type: "osf-apply"`. Pass the change na
 Immediately use Agent tool with `subagent_type: "osf-verify"`. Pass the change name.
 
 **Step 4: Verify-Fix Loop**
-If CRITICALs exist → use `osf-apply` to fix → `osf-verify` again → repeat until 0 CRITICALs. Max 3 rounds. If CRITICALs persist, STOP and report to user.
+After osf-verify returns its report, check for CRITICALs:
+
+- **0 CRITICALs** → proceed to Step 5.
+- **CRITICALs exist** → loop:
+  1. Use Agent tool with `subagent_type: "osf-apply"` — pass the change name + CRITICAL issues as fix instructions. Do NOT fix code yourself.
+  2. Use Agent tool with `subagent_type: "osf-verify"` — pass the change name. Do NOT skip re-verify.
+  3. Check report again. If CRITICALs remain, repeat from 1.
+  4. Max 3 rounds. If CRITICALs persist after 3 rounds, STOP and report to user.
 
 **Step 5: Archive**
 Immediately use Agent tool with `subagent_type: "osf-archive"`. Pass the change name.
@@ -141,7 +148,13 @@ Use Agent tool with `subagent_type: "osf-apply"`. Pass plan context (no spec —
 Immediately use Agent tool with `subagent_type: "osf-verify"`. Pass plan context.
 
 **Step 3: Verify-Fix Loop**
-Same as Full pipeline — fix CRITICALs until 0 remain. Max 3 rounds.
+Same as Full pipeline Step 4:
+  1. Use Agent tool with `subagent_type: "osf-apply"` to fix CRITICALs. Do NOT fix code yourself.
+  2. Use Agent tool with `subagent_type: "osf-verify"` to re-verify. Do NOT skip re-verify.
+  3. Repeat until 0 CRITICALs. Max 3 rounds.
+
+**Step 4: Archive**
+If 0 CRITICALs → immediately use Agent tool with `subagent_type: "osf-archive"`.
 
 ### Light Pipeline (implement only)
 
@@ -169,7 +182,7 @@ Announce completion based on pipeline used:
 ```
 ## ✅ Autopilot Complete
 
-**Pipeline**: implement ✓ → verify ✓
+**Pipeline**: implement ✓ → verify ✓ → archive ✓
 **Verify rounds**: [N]
 ```
 
@@ -197,6 +210,7 @@ Options:
 
 ## Guardrails
 
+- **NEVER fix code yourself after verify** — when osf-verify reports issues, delegate fixes to osf-apply via Agent tool. Then re-verify via osf-verify. Never skip re-verify after fixing.
 - Never stop to ask the user during the pipeline — run all steps including archive without interruption
 - Cold start exploration must be thorough — same depth as interactive brainstorm
 - All autonomous decisions must be grounded in codebase patterns or web research, never guessed
