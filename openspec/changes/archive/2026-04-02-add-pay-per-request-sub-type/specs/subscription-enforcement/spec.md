@@ -1,19 +1,4 @@
-## ADDED Requirements
-
-### Requirement: Pre-request subscription budget check
-The proxy SHALL check subscription budgets before forwarding a request when the sub-key has any subscriptions. The check SHALL use Redis counters for performance.
-
-#### Scenario: Sub-key with no subscriptions
-- **WHEN** a proxy request uses a sub-key that has never had any subscriptions
-- **THEN** the system SHALL allow the request without any budget check (unlimited)
-
-#### Scenario: Sub-key with active subscription and available budget
-- **WHEN** a proxy request uses a sub-key with an active subscription that has remaining budget
-- **THEN** the system SHALL allow the request
-
-#### Scenario: All subscriptions exhausted or expired
-- **WHEN** a proxy request uses a sub-key where all subscriptions are in terminal states (exhausted, expired, cancelled)
-- **THEN** the system SHALL return 429 with Anthropic-format error: `{"type":"error","error":{"type":"rate_limit_error","message":"Subscription limit exceeded"}}`
+## MODIFIED Requirements
 
 ### Requirement: Subscription selection priority
 The proxy SHALL select the charging subscription using this priority: hourly_reset subscriptions first, then pay_per_request subscriptions, then fixed subscriptions. Within the same type, FIFO (oldest `created_at` first).

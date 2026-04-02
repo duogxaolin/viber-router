@@ -52,7 +52,7 @@ async fn load_subscriptions(state: &AppState, group_key_id: Uuid) -> Vec<KeySubs
 
 /// Get the current cost for a subscription from Redis, rebuilding from DB on cache miss.
 pub async fn get_total_cost(state: &AppState, sub: &KeySubscription) -> f64 {
-    let key = if sub.sub_type == "hourly_reset" {
+    let key = if sub.reset_hours.is_some() {
         if let (Some(activated_at), Some(reset_hours)) = (sub.activated_at, sub.reset_hours) {
             let window_idx = compute_window_idx(activated_at, reset_hours);
             format!("sub_cost:{}:w:{window_idx}", sub.id)
@@ -76,9 +76,7 @@ pub async fn get_total_cost(state: &AppState, sub: &KeySubscription) -> f64 {
     // Cache it
     if let Ok(mut conn) = state.redis.get().await {
         let _: Result<(), _> = conn.set(&key, cost).await;
-        if sub.sub_type == "hourly_reset"
-            && let Some(reset_hours) = sub.reset_hours
-        {
+        if let Some(reset_hours) = sub.reset_hours {
             let _: Result<(), _> = conn.expire(&key, (reset_hours as i64) * 3600).await;
         }
     }
@@ -88,7 +86,7 @@ pub async fn get_total_cost(state: &AppState, sub: &KeySubscription) -> f64 {
 
 /// Get per-model cost for a subscription from Redis, rebuilding from DB on cache miss.
 async fn get_model_cost(state: &AppState, sub: &KeySubscription, model: &str) -> f64 {
-    let key = if sub.sub_type == "hourly_reset" {
+    let key = if sub.reset_hours.is_some() {
         if let (Some(activated_at), Some(reset_hours)) = (sub.activated_at, sub.reset_hours) {
             let window_idx = compute_window_idx(activated_at, reset_hours);
             format!("sub_cost:{}:w:{window_idx}:m:{model}", sub.id)
@@ -111,9 +109,7 @@ async fn get_model_cost(state: &AppState, sub: &KeySubscription, model: &str) ->
 
     if let Ok(mut conn) = state.redis.get().await {
         let _: Result<(), _> = conn.set(&key, cost).await;
-        if sub.sub_type == "hourly_reset"
-            && let Some(reset_hours) = sub.reset_hours
-        {
+        if let Some(reset_hours) = sub.reset_hours {
             let _: Result<(), _> = conn.expire(&key, (reset_hours as i64) * 3600).await;
         }
     }
@@ -122,7 +118,7 @@ async fn get_model_cost(state: &AppState, sub: &KeySubscription, model: &str) ->
 }
 
 async fn rebuild_total_cost(db: &PgPool, sub: &KeySubscription) -> f64 {
-    if sub.sub_type == "hourly_reset" {
+    if sub.reset_hours.is_some() {
         if let (Some(activated_at), Some(reset_hours)) = (sub.activated_at, sub.reset_hours) {
             let window_idx = compute_window_idx(activated_at, reset_hours);
             let window_start = activated_at + chrono::Duration::seconds((window_idx as i64) * (reset_hours as i64) * 3600);
@@ -152,7 +148,7 @@ async fn rebuild_total_cost(db: &PgPool, sub: &KeySubscription) -> f64 {
 }
 
 async fn rebuild_model_cost(db: &PgPool, sub: &KeySubscription, model: &str) -> f64 {
-    if sub.sub_type == "hourly_reset" {
+    if sub.reset_hours.is_some() {
         if let (Some(activated_at), Some(reset_hours)) = (sub.activated_at, sub.reset_hours) {
             let window_idx = compute_window_idx(activated_at, reset_hours);
             let window_start = activated_at + chrono::Duration::seconds((window_idx as i64) * (reset_hours as i64) * 3600);
@@ -201,11 +197,15 @@ pub async fn check_subscriptions(
         return SubCheckResult::Blocked;
     }
 
-    // Sort: hourly_reset first, then fixed, FIFO within same type
+    // Sort: hourly_reset first, then pay_per_request, then fixed, FIFO within same type
     let mut sorted = active;
     sorted.sort_by(|a, b| {
         let type_order = |t: &str| -> u8 {
-            if t == "hourly_reset" { 0 } else { 1 }
+            match t {
+                "hourly_reset" => 0,
+                "pay_per_request" => 1,
+                _ => 2,
+            }
         };
         type_order(&a.sub_type)
             .cmp(&type_order(&b.sub_type))
@@ -239,11 +239,11 @@ pub async fn check_subscriptions(
         // Check total budget
         let total_cost = get_total_cost(state, sub).await;
         if total_cost >= sub.cost_limit_usd {
-            if sub.sub_type == "hourly_reset" {
+            if sub.reset_hours.is_some() {
                 // Window full — skip but don't mark exhausted
                 continue;
             }
-            // Fixed subscription exhausted — mark permanently
+            // Fixed/pay_per_request subscription exhausted — mark permanently
             let db = state.db.clone();
             let sub_id = sub.id;
             let key_id = sub.group_key_id;
@@ -257,6 +257,16 @@ pub async fn check_subscriptions(
                     let _: Result<(), _> = conn.del(format!("key_subs:{key_id}")).await;
                 }
             });
+            continue;
+        }
+
+        // For pay_per_request: skip if model is not in model_request_costs
+        if sub.sub_type == "pay_per_request"
+            && let Some(model_name) = model
+            && sub.model_request_costs.as_object()
+                .map(|m| !m.contains_key(model_name))
+                .unwrap_or(true)
+        {
             continue;
         }
 
@@ -378,7 +388,6 @@ pub async fn update_cost_counters(
     sub_id: Uuid,
     model: &str,
     cost: f64,
-    sub_type: &str,
     activated_at: Option<chrono::DateTime<Utc>>,
     reset_hours: Option<i32>,
 ) {
@@ -387,7 +396,7 @@ pub async fn update_cost_counters(
         return;
     };
 
-    if sub_type == "hourly_reset" {
+    if reset_hours.is_some() {
         if let (Some(act), Some(rh)) = (activated_at, reset_hours) {
             let window_idx = compute_window_idx(act, rh);
             let ttl = (rh as i64) * 3600;

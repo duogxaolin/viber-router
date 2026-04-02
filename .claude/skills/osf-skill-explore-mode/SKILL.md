@@ -269,9 +269,11 @@ When all items pass:
 Is this work:
 A. Small (1-3 tasks, single component, straightforward)
    → Can implement directly without spec
-B. ★ Large (4+ tasks, multi-component, complex, needs design)
-   → Better to create spec first for tracking
-C. Unsure
+B. Large (4+ tasks, multi-component, complex, needs design)
+   → Choose spec-first or direct implementation
+C. ★ Autopilot (spec → implement → verify, no stops)
+   → Full pipeline runs automatically after you confirm
+D. Unsure
    → Let me help you decide
 
 What's your call?
@@ -314,6 +316,18 @@ Which path?
 
 When user chooses A → use Agent tool with `subagent_type: "osf-proposal"`. After proposal completes, immediately run osf-apply with the change name — do NOT ask. Use Agent tool with `subagent_type: "osf-apply"`.
 When user chooses B → use Agent tool with `subagent_type: "osf-apply"`. Pass plan context.
+
+### Autopilot
+
+Full pipeline — runs all three steps without stopping after user confirms:
+
+1. osf-proposal (create spec)
+2. osf-apply (implement from spec)
+3. osf-verify (verify implementation)
+
+No questions between steps. After verify completes, ask about archive.
+
+When user chooses Autopilot → use Agent tool with `subagent_type: "osf-proposal"`. When proposal completes → immediately use Agent tool with `subagent_type: "osf-apply"` with the change name. When apply completes → immediately use Agent tool with `subagent_type: "osf-verify"`. When verify completes → offer archive (same as "After Verification" below).
 
 ### After Implementation
 

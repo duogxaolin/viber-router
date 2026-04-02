@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Redis cost counters
 The system SHALL maintain real-time cost counters in Redis for each active subscription. The windowing key pattern SHALL be used for any subscription where `reset_hours` is not null, regardless of `sub_type`.

@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Subscription plans table
 The system SHALL store subscription plan templates in a `subscription_plans` table with columns: `id` (UUID PK), `name` (TEXT NOT NULL), `sub_type` (TEXT NOT NULL, one of 'fixed', 'hourly_reset', or 'pay_per_request'), `cost_limit_usd` (FLOAT8 NOT NULL), `model_limits` (JSONB DEFAULT '{}'), `model_request_costs` (JSONB NOT NULL DEFAULT '{}'), `reset_hours` (INT, nullable), `duration_days` (INT NOT NULL), `is_active` (BOOLEAN DEFAULT true), `created_at` (TIMESTAMPTZ), `updated_at` (TIMESTAMPTZ).

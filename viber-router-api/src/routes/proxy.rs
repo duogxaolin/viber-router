@@ -1141,49 +1141,71 @@ async fn proxy_handler(
 
                         // Calculate cost and update subscription counters
                         let cost_usd = if let Some(ref model_name) = request_model {
-                            let pricing_cache = state.pricing_cache.read().await;
-                            if let Some(pricing) = pricing_cache.get(model_name) {
-                                let ri = server.rate_input.unwrap_or(1.0);
-                                let ro = server.rate_output.unwrap_or(1.0);
-                                let rcw = server.rate_cache_write.unwrap_or(1.0);
-                                let rcr = server.rate_cache_read.unwrap_or(1.0);
-                                let cost = crate::subscription::calculate_cost(
-                                    pricing, ri, ro, rcw, rcr,
-                                    inp, out, cache_creation, cache_read,
-                                    server.normalize_cache_read,
-                                );
-                                drop(pricing_cache);
+                            if let Some(sub_id) = selected_subscription_id {
+                                if let Ok(sub) = sqlx::query_as::<_, crate::models::KeySubscription>(
+                                    "SELECT * FROM key_subscriptions WHERE id = $1",
+                                )
+                                .bind(sub_id)
+                                .fetch_one(&state.db)
+                                .await
+                                {
+                                    let cost = if sub.sub_type == "pay_per_request" {
+                                        // Flat cost from model_request_costs
+                                        sub.model_request_costs
+                                            .as_object()
+                                            .and_then(|m| m.get(model_name.as_str()))
+                                            .and_then(|v| v.as_f64())
+                                            .unwrap_or(0.0)
+                                    } else {
+                                        let pricing_cache = state.pricing_cache.read().await;
+                                        if let Some(pricing) = pricing_cache.get(model_name) {
+                                            let ri = server.rate_input.unwrap_or(1.0);
+                                            let ro = server.rate_output.unwrap_or(1.0);
+                                            let rcw = server.rate_cache_write.unwrap_or(1.0);
+                                            let rcr = server.rate_cache_read.unwrap_or(1.0);
+                                            let c = crate::subscription::calculate_cost(
+                                                pricing, ri, ro, rcw, rcr,
+                                                inp, out, cache_creation, cache_read,
+                                                server.normalize_cache_read,
+                                            );
+                                            drop(pricing_cache);
+                                            c
+                                        } else {
+                                            drop(pricing_cache);
+                                            0.0
+                                        }
+                                    };
 
-                                if let Some(sub_id) = selected_subscription_id {
                                     // Lazy activation
-                                    crate::subscription::ensure_activated(&state, sub_id, {
-                                        // Look up duration_days from DB (quick query)
-                                        sqlx::query_scalar::<_, i32>(
-                                            "SELECT duration_days FROM key_subscriptions WHERE id = $1",
-                                        )
-                                        .bind(sub_id)
-                                        .fetch_one(&state.db)
-                                        .await
-                                        .unwrap_or(30)
-                                    }).await;
+                                    crate::subscription::ensure_activated(&state, sub_id, sub.duration_days).await;
 
-                                    // Get subscription details for counter update
-                                    if let Ok(sub) = sqlx::query_as::<_, crate::models::KeySubscription>(
-                                        "SELECT * FROM key_subscriptions WHERE id = $1",
-                                    )
-                                    .bind(sub_id)
-                                    .fetch_one(&state.db)
-                                    .await
-                                    {
-                                        crate::subscription::update_cost_counters(
-                                            &state, sub_id, model_name, cost,
-                                            &sub.sub_type, sub.activated_at, sub.reset_hours,
-                                        ).await;
-                                    }
+                                    crate::subscription::update_cost_counters(
+                                        &state, sub_id, model_name, cost,
+                                        sub.activated_at, sub.reset_hours,
+                                    ).await;
+
+                                    Some(cost)
+                                } else {
+                                    None
                                 }
-                                Some(cost)
                             } else {
-                                None
+                                // No subscription — still calculate cost for logging
+                                let pricing_cache = state.pricing_cache.read().await;
+                                if let Some(pricing) = pricing_cache.get(model_name) {
+                                    let ri = server.rate_input.unwrap_or(1.0);
+                                    let ro = server.rate_output.unwrap_or(1.0);
+                                    let rcw = server.rate_cache_write.unwrap_or(1.0);
+                                    let rcr = server.rate_cache_read.unwrap_or(1.0);
+                                    let cost = crate::subscription::calculate_cost(
+                                        pricing, ri, ro, rcw, rcr,
+                                        inp, out, cache_creation, cache_read,
+                                        server.normalize_cache_read,
+                                    );
+                                    drop(pricing_cache);
+                                    Some(cost)
+                                } else {
+                                    None
+                                }
                             }
                         } else {
                             None
@@ -1565,45 +1587,67 @@ where
                     // Spawn async task for cost calculation and usage tracking
                     tokio::spawn(async move {
                         let cost_usd = if let Some(ref model_name) = model {
-                            let pricing_cache = state.pricing_cache.read().await;
-                            if let Some(pricing) = pricing_cache.get(model_name) {
-                                let cost = crate::subscription::calculate_cost(
-                                    pricing,
-                                    rate_input, rate_output,
-                                    rate_cache_write, rate_cache_read,
-                                    input_tokens, output_tokens,
-                                    cache_creation_tokens, cache_read_tokens,
-                                    normalize_cache_read,
-                                );
-                                drop(pricing_cache);
+                            if let Some(sub_id) = subscription_id {
+                                if let Ok(sub) = sqlx::query_as::<_, crate::models::KeySubscription>(
+                                    "SELECT * FROM key_subscriptions WHERE id = $1",
+                                )
+                                .bind(sub_id)
+                                .fetch_one(&state.db)
+                                .await
+                                {
+                                    let cost = if sub.sub_type == "pay_per_request" {
+                                        sub.model_request_costs
+                                            .as_object()
+                                            .and_then(|m| m.get(model_name.as_str()))
+                                            .and_then(|v| v.as_f64())
+                                            .unwrap_or(0.0)
+                                    } else {
+                                        let pricing_cache = state.pricing_cache.read().await;
+                                        if let Some(pricing) = pricing_cache.get(model_name) {
+                                            let c = crate::subscription::calculate_cost(
+                                                pricing,
+                                                rate_input, rate_output,
+                                                rate_cache_write, rate_cache_read,
+                                                input_tokens, output_tokens,
+                                                cache_creation_tokens, cache_read_tokens,
+                                                normalize_cache_read,
+                                            );
+                                            drop(pricing_cache);
+                                            c
+                                        } else {
+                                            drop(pricing_cache);
+                                            0.0
+                                        }
+                                    };
 
-                                if let Some(sub_id) = subscription_id {
-                                    crate::subscription::ensure_activated(&state, sub_id, {
-                                        sqlx::query_scalar::<_, i32>(
-                                            "SELECT duration_days FROM key_subscriptions WHERE id = $1",
-                                        )
-                                        .bind(sub_id)
-                                        .fetch_one(&state.db)
-                                        .await
-                                        .unwrap_or(30)
-                                    }).await;
+                                    crate::subscription::ensure_activated(&state, sub_id, sub.duration_days).await;
 
-                                    if let Ok(sub) = sqlx::query_as::<_, crate::models::KeySubscription>(
-                                        "SELECT * FROM key_subscriptions WHERE id = $1",
-                                    )
-                                    .bind(sub_id)
-                                    .fetch_one(&state.db)
-                                    .await
-                                    {
-                                        crate::subscription::update_cost_counters(
-                                            &state, sub_id, model_name, cost,
-                                            &sub.sub_type, sub.activated_at, sub.reset_hours,
-                                        ).await;
-                                    }
+                                    crate::subscription::update_cost_counters(
+                                        &state, sub_id, model_name, cost,
+                                        sub.activated_at, sub.reset_hours,
+                                    ).await;
+
+                                    Some(cost)
+                                } else {
+                                    None
                                 }
-                                Some(cost)
                             } else {
-                                None
+                                // No subscription — still calculate cost for logging
+                                let pricing_cache = state.pricing_cache.read().await;
+                                if let Some(pricing) = pricing_cache.get(model_name) {
+                                    let cost = crate::subscription::calculate_cost(
+                                        pricing,
+                                        rate_input, rate_output,
+                                        rate_cache_write, rate_cache_read,
+                                        input_tokens, output_tokens,
+                                        cache_creation_tokens, cache_read_tokens,
+                                        normalize_cache_read,
+                                    );
+                                    drop(pricing_cache);
+                                    Some(cost)
+                                } else {
+                                    None
+                                }
                             }
                         } else {
                             None

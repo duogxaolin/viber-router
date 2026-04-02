@@ -1,11 +1,4 @@
-## ADDED Requirements
-
-### Requirement: Plans sidebar page
-The system SHALL display a "Plans" page accessible from the main sidebar navigation, at the same level as Groups and Models.
-
-#### Scenario: Sidebar navigation
-- **WHEN** the user views the sidebar
-- **THEN** a "Plans" link SHALL be visible and navigate to the Plans page
+## MODIFIED Requirements
 
 ### Requirement: Plans list view
 The Plans page SHALL display all subscription plans in a table with columns: Name, Type (fixed/hourly_reset/pay_per_request), Cost Limit, Model Limits, Model Request Costs, Reset Hours, Duration (days), Active status.
