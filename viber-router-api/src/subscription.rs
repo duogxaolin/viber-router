@@ -8,8 +8,6 @@ use crate::routes::{AppState, ModelPricing};
 
 /// Result of the pre-request subscription check.
 pub enum SubCheckResult {
-    /// No subscriptions exist for this key — unlimited usage.
-    Unlimited,
     /// A subscription was selected for charging.
     Allowed {
         subscription_id: Uuid,
@@ -35,7 +33,7 @@ async fn load_subscriptions(state: &AppState, group_key_id: Uuid) -> Vec<KeySubs
 
     // DB fallback
     let subs = sqlx::query_as::<_, KeySubscription>(
-        "SELECT * FROM key_subscriptions WHERE group_key_id = $1 AND status = 'active' ORDER BY created_at ASC",
+        "SELECT * FROM key_subscriptions WHERE group_key_id = $1 ORDER BY created_at ASC",
     )
     .bind(group_key_id)
     .fetch_all(&state.db)
@@ -197,13 +195,14 @@ pub async fn check_subscriptions(
     group_key_id: Uuid,
     model: Option<&str>,
 ) -> SubCheckResult {
-    let subs = load_subscriptions(state, group_key_id).await;
-    if subs.is_empty() {
-        return SubCheckResult::Unlimited;
+    let all_subs = load_subscriptions(state, group_key_id).await;
+    let active: Vec<_> = all_subs.into_iter().filter(|s| s.status == "active").collect();
+    if active.is_empty() {
+        return SubCheckResult::Blocked;
     }
 
     // Sort: hourly_reset first, then fixed, FIFO within same type
-    let mut sorted = subs;
+    let mut sorted = active;
     sorted.sort_by(|a, b| {
         let type_order = |t: &str| -> u8 {
             if t == "hourly_reset" { 0 } else { 1 }

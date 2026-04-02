@@ -575,7 +575,6 @@ async fn proxy_handler(
         )
         .await
         {
-            crate::subscription::SubCheckResult::Unlimited => {}
             crate::subscription::SubCheckResult::Allowed { subscription_id, rpm_limit } => {
                 selected_subscription_id = Some(subscription_id);
                 // Increment RPM counter (optimistic, pre-request)
