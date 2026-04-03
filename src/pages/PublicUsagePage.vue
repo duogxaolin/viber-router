@@ -146,8 +146,20 @@
 
         <!-- Usage table -->
         <div class="row items-center q-mb-sm">
-          <div class="text-subtitle1">Usage (Last 30 Days)</div>
+          <div class="text-subtitle1">Usage ({{ usagePeriodLabels[usagePeriod] }})</div>
           <q-space />
+          <q-btn-toggle
+            v-model="usagePeriod"
+            flat dense no-caps
+            toggle-color="primary"
+            :options="[
+              { label: '1h', value: '1h' },
+              { label: '6h', value: '6h' },
+              { label: '24h', value: '24h' },
+              { label: '7d', value: '7d' },
+              { label: '30d', value: '30d' },
+            ]"
+          />
           <template v-if="!meterRunning">
             <q-btn flat dense no-caps icon="timer" label="Meter" size="sm" @click="startMeter" />
           </template>
@@ -169,7 +181,7 @@
         />
 
         <!-- Status -->
-        <div class="text-subtitle1 q-mb-sm">Status</div>
+        <div class="text-subtitle1 q-mb-sm q-mt-lg">Status</div>
         <q-card bordered flat class="q-mb-lg">
           <q-card-section>
             <div v-if="uptimeError" class="text-caption text-negative">
@@ -478,7 +490,7 @@ async function stopMeter() {
   const elapsed = meterElapsed.value;
   const snapshot = meterSnapshot.value;
   try {
-    const res = await api.get<UsageData>('/api/public/usage', { params: { key: routeKey.value } });
+    const res = await api.get<UsageData>('/api/public/usage', { params: { key: routeKey.value, period: usagePeriod.value } });
     const fresh = res.data.usage;
     const allRows: MeterDeltaRow[] = fresh.map((row) => {
       const snap = snapshot.find((s) => s.model === row.model);
@@ -583,6 +595,16 @@ const CHART_COLORS = ['#1976D2', '#26A69A', '#FF6F00', '#AB47BC', '#EF5350', '#6
 const ttftPeriod = ref('24h');
 const ttftLoading = ref(false);
 const ttftData = ref<TtftResponse | null>(null);
+
+// Usage period state
+const usagePeriod = ref('30d');
+const usagePeriodLabels: Record<string, string> = {
+  '1h': 'Last 1 Hour',
+  '6h': 'Last 6 Hours',
+  '24h': 'Last 24 Hours',
+  '7d': 'Last 7 Days',
+  '30d': 'Last 30 Days',
+};
 
 // Uptime state
 interface UptimeBucketRaw {
@@ -694,7 +716,7 @@ async function fetchUsage(key: string, silent = false) {
     data.value = null;
   }
   try {
-    const res = await api.get<UsageData>('/api/public/usage', { params: { key } });
+    const res = await api.get<UsageData>('/api/public/usage', { params: { key, period: usagePeriod.value } });
     data.value = res.data;
     fetchTtft(key);
     fetchUptime(key);
@@ -739,6 +761,12 @@ watch(routeKey, (key) => {
 watch(ttftPeriod, () => {
   const key = routeKey.value;
   if (key) fetchTtft(key);
+});
+
+// Re-fetch usage when period changes
+watch(usagePeriod, () => {
+  const key = routeKey.value;
+  if (key && data.value) fetchUsage(key, true);
 });
 
 // Reactive clock for countdown display (ticks every 60s)

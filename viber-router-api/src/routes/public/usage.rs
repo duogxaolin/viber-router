@@ -15,6 +15,7 @@ use crate::subscription;
 #[derive(Debug, Deserialize)]
 pub struct UsageParams {
     key: Option<String>,
+    period: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,16 +117,27 @@ pub async fn public_usage(
         }
     };
 
-    // Query usage aggregated by model (no server info), last 30 days
+    // Map period param to a SQL interval (allowlist — never interpolate user input directly)
+    let interval = match params.period.as_deref() {
+        Some("1h") => "1 hour",
+        Some("6h") => "6 hours",
+        Some("24h") => "24 hours",
+        Some("7d") => "7 days",
+        _ => "30 days",
+    };
+
+    // Query usage aggregated by model (no server info), for the selected period
     let usage = sqlx::query_as::<_, ModelUsage>(
-        "SELECT model, \
-         (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(cache_creation_tokens), 0) + COALESCE(SUM(cache_read_tokens), 0))::bigint as effective_input_tokens, \
-         COALESCE(SUM(output_tokens), 0)::bigint as total_output_tokens, \
-         COUNT(*)::bigint as request_count, \
-         SUM(cost_usd) as cost_usd \
-         FROM token_usage_logs \
-         WHERE group_key_id = $1 AND created_at >= now() - interval '30 days' \
-         GROUP BY model ORDER BY model",
+        &format!(
+            "SELECT model, \
+             (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(cache_creation_tokens), 0) + COALESCE(SUM(cache_read_tokens), 0))::bigint as effective_input_tokens, \
+             COALESCE(SUM(output_tokens), 0)::bigint as total_output_tokens, \
+             COUNT(*)::bigint as request_count, \
+             SUM(cost_usd) as cost_usd \
+             FROM token_usage_logs \
+             WHERE group_key_id = $1 AND created_at >= now() - interval '{interval}' \
+             GROUP BY model ORDER BY model"
+        ),
     )
     .bind(key_info.key_id)
     .fetch_all(&state.db)
