@@ -1274,7 +1274,7 @@ async fn proxy_handler(
 
                                     crate::subscription::update_cost_counters(
                                         &state, sub_id, model_name, cost,
-                                        sub.activated_at, sub.reset_hours,
+                                        sub.reset_hours,
                                     ).await;
 
                                     Some(cost)
@@ -1732,7 +1732,7 @@ where
 
                                     crate::subscription::update_cost_counters(
                                         &state, sub_id, model_name, cost,
-                                        sub.activated_at, sub.reset_hours,
+                                        sub.reset_hours,
                                     ).await;
 
                                     Some(cost)

@@ -1,10 +1,55 @@
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use deadpool_redis::redis::{AsyncCommands, cmd};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::KeySubscription;
 use crate::routes::{AppState, ModelPricing};
+
+/// Get the window start epoch for a subscription from Redis.
+/// Returns None if no active window exists (key missing or Redis error).
+async fn get_window_start(state: &AppState, sub_id: Uuid) -> Option<i64> {
+    let key = format!("sub_window_start:{sub_id}");
+    let mut conn = state.redis.get().await.ok()?;
+    let val: Option<String> = conn.get(&key).await.ok()?;
+    val?.parse::<i64>().ok()
+}
+
+/// Ensure a window start exists for a subscription, creating one if absent (SETNX semantics).
+/// Returns the stored epoch, or None on Redis error.
+async fn ensure_window_start(state: &AppState, sub_id: Uuid, reset_hours: i32) -> Option<i64> {
+    let key = format!("sub_window_start:{sub_id}");
+    let ttl = (reset_hours as i64) * 3600;
+    let now_epoch = Utc::now().timestamp();
+
+    let mut conn = match state.redis.get().await {
+        Ok(c) => c,
+        Err(_) => {
+            tracing::warn!("Redis unavailable in ensure_window_start, sub_id={sub_id}");
+            return None;
+        }
+    };
+
+    // SET NX EX — only sets if key does not exist
+    let _: Result<(), _> = deadpool_redis::redis::cmd("SET")
+        .arg(&key)
+        .arg(now_epoch)
+        .arg("NX")
+        .arg("EX")
+        .arg(ttl)
+        .query_async(&mut *conn)
+        .await;
+
+    // GET the stored value (either the one we just set, or the pre-existing one)
+    let val: Option<String> = match conn.get(&key).await {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::warn!("Redis GET failed in ensure_window_start, sub_id={sub_id}");
+            return None;
+        }
+    };
+    val?.parse::<i64>().ok()
+}
 
 /// Result of the pre-request subscription check.
 pub enum SubCheckResult {
@@ -52,137 +97,158 @@ async fn load_subscriptions(state: &AppState, group_key_id: Uuid) -> Vec<KeySubs
 
 /// Get the current cost for a subscription from Redis, rebuilding from DB on cache miss.
 pub async fn get_total_cost(state: &AppState, sub: &KeySubscription) -> f64 {
-    let key = if sub.reset_hours.is_some() {
-        if let (Some(activated_at), Some(reset_hours)) = (sub.activated_at, sub.reset_hours) {
-            let window_idx = compute_window_idx(activated_at, reset_hours);
-            format!("sub_cost:{}:w:{window_idx}", sub.id)
-        } else {
-            return 0.0; // Not yet activated
+    if sub.reset_hours.is_some() {
+        let ws = match get_window_start(state, sub.id).await {
+            Some(ws) => ws,
+            None => return 0.0, // No active window
+        };
+        let key = format!("sub_cost:{}:ws:{ws}", sub.id);
+        if let Ok(mut conn) = state.redis.get().await {
+            let val: Result<Option<f64>, _> = conn.get(&key).await;
+            if let Ok(Some(cost)) = val {
+                return cost;
+            }
         }
+        // Rebuild from DB
+        rebuild_total_cost(state, sub, ws).await
     } else {
-        format!("sub_cost:{}", sub.id)
-    };
-
-    if let Ok(mut conn) = state.redis.get().await {
-        let val: Result<Option<f64>, _> = conn.get(&key).await;
-        if let Ok(Some(cost)) = val {
-            return cost;
+        let key = format!("sub_cost:{}", sub.id);
+        if let Ok(mut conn) = state.redis.get().await {
+            let val: Result<Option<f64>, _> = conn.get(&key).await;
+            if let Ok(Some(cost)) = val {
+                return cost;
+            }
         }
-    }
-
-    // Rebuild from DB
-    let cost = rebuild_total_cost(&state.db, sub).await;
-
-    // Cache it
-    if let Ok(mut conn) = state.redis.get().await {
-        let _: Result<(), _> = conn.set(&key, cost).await;
-        if let Some(reset_hours) = sub.reset_hours {
-            let _: Result<(), _> = conn.expire(&key, (reset_hours as i64) * 3600).await;
+        // Rebuild from DB
+        let cost = rebuild_total_cost_fixed(&state.db, sub).await;
+        if let Ok(mut conn) = state.redis.get().await {
+            let _: Result<(), _> = conn.set(&key, cost).await;
         }
+        cost
     }
-
-    cost
 }
 
 /// Get per-model cost for a subscription from Redis, rebuilding from DB on cache miss.
 async fn get_model_cost(state: &AppState, sub: &KeySubscription, model: &str) -> f64 {
-    let key = if sub.reset_hours.is_some() {
-        if let (Some(activated_at), Some(reset_hours)) = (sub.activated_at, sub.reset_hours) {
-            let window_idx = compute_window_idx(activated_at, reset_hours);
-            format!("sub_cost:{}:w:{window_idx}:m:{model}", sub.id)
-        } else {
-            return 0.0;
+    if sub.reset_hours.is_some() {
+        let ws = match get_window_start(state, sub.id).await {
+            Some(ws) => ws,
+            None => return 0.0, // No active window
+        };
+        let key = format!("sub_cost:{}:ws:{ws}:m:{model}", sub.id);
+        if let Ok(mut conn) = state.redis.get().await {
+            let val: Result<Option<f64>, _> = conn.get(&key).await;
+            if let Ok(Some(cost)) = val {
+                return cost;
+            }
         }
+        // Rebuild from DB
+        rebuild_model_cost(state, sub, model, ws).await
     } else {
-        format!("sub_cost:{}:m:{model}", sub.id)
-    };
-
-    if let Ok(mut conn) = state.redis.get().await {
-        let val: Result<Option<f64>, _> = conn.get(&key).await;
-        if let Ok(Some(cost)) = val {
-            return cost;
+        let key = format!("sub_cost:{}:m:{model}", sub.id);
+        if let Ok(mut conn) = state.redis.get().await {
+            let val: Result<Option<f64>, _> = conn.get(&key).await;
+            if let Ok(Some(cost)) = val {
+                return cost;
+            }
         }
+        // Rebuild from DB
+        let cost = rebuild_model_cost_fixed(&state.db, sub, model).await;
+        if let Ok(mut conn) = state.redis.get().await {
+            let _: Result<(), _> = conn.set(&key, cost).await;
+        }
+        cost
     }
+}
 
-    // Rebuild from DB
-    let cost = rebuild_model_cost(&state.db, sub, model).await;
+/// Rebuild total cost for a windowed subscription from DB, cache the result, and return it.
+async fn rebuild_total_cost(state: &AppState, sub: &KeySubscription, window_start: i64) -> f64 {
+    let reset_hours = match sub.reset_hours {
+        Some(rh) => rh,
+        None => return 0.0,
+    };
+    let ws_dt = match Utc.timestamp_opt(window_start, 0).single() {
+        Some(dt) => dt,
+        None => return 0.0,
+    };
+    let we_dt = ws_dt + chrono::Duration::seconds((reset_hours as i64) * 3600);
 
+    let cost = sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(SUM(cost_usd), 0) FROM token_usage_logs \
+         WHERE subscription_id = $1 AND created_at >= $2 AND created_at < $3",
+    )
+    .bind(sub.id)
+    .bind(ws_dt)
+    .bind(we_dt)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0.0);
+
+    let key = format!("sub_cost:{}:ws:{window_start}", sub.id);
     if let Ok(mut conn) = state.redis.get().await {
         let _: Result<(), _> = conn.set(&key, cost).await;
-        if let Some(reset_hours) = sub.reset_hours {
-            let _: Result<(), _> = conn.expire(&key, (reset_hours as i64) * 3600).await;
-        }
     }
-
     cost
 }
 
-async fn rebuild_total_cost(db: &PgPool, sub: &KeySubscription) -> f64 {
-    if sub.reset_hours.is_some() {
-        if let (Some(activated_at), Some(reset_hours)) = (sub.activated_at, sub.reset_hours) {
-            let window_idx = compute_window_idx(activated_at, reset_hours);
-            let window_start = activated_at + chrono::Duration::seconds((window_idx as i64) * (reset_hours as i64) * 3600);
-            let window_end = window_start + chrono::Duration::seconds((reset_hours as i64) * 3600);
-            sqlx::query_scalar::<_, f64>(
-                "SELECT COALESCE(SUM(cost_usd), 0) FROM token_usage_logs \
-                 WHERE subscription_id = $1 AND created_at >= $2 AND created_at < $3",
-            )
-            .bind(sub.id)
-            .bind(window_start)
-            .bind(window_end)
-            .fetch_one(db)
-            .await
-            .unwrap_or(0.0)
-        } else {
-            0.0
-        }
-    } else {
-        sqlx::query_scalar::<_, f64>(
-            "SELECT COALESCE(SUM(cost_usd), 0) FROM token_usage_logs WHERE subscription_id = $1",
-        )
-        .bind(sub.id)
-        .fetch_one(db)
-        .await
-        .unwrap_or(0.0)
-    }
+/// Rebuild total cost for a fixed (non-windowed) subscription from DB.
+async fn rebuild_total_cost_fixed(db: &PgPool, sub: &KeySubscription) -> f64 {
+    sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(SUM(cost_usd), 0) FROM token_usage_logs WHERE subscription_id = $1",
+    )
+    .bind(sub.id)
+    .fetch_one(db)
+    .await
+    .unwrap_or(0.0)
 }
 
-async fn rebuild_model_cost(db: &PgPool, sub: &KeySubscription, model: &str) -> f64 {
-    if sub.reset_hours.is_some() {
-        if let (Some(activated_at), Some(reset_hours)) = (sub.activated_at, sub.reset_hours) {
-            let window_idx = compute_window_idx(activated_at, reset_hours);
-            let window_start = activated_at + chrono::Duration::seconds((window_idx as i64) * (reset_hours as i64) * 3600);
-            let window_end = window_start + chrono::Duration::seconds((reset_hours as i64) * 3600);
-            sqlx::query_scalar::<_, f64>(
-                "SELECT COALESCE(SUM(cost_usd), 0) FROM token_usage_logs \
-                 WHERE subscription_id = $1 AND model = $2 AND created_at >= $3 AND created_at < $4",
-            )
-            .bind(sub.id)
-            .bind(model)
-            .bind(window_start)
-            .bind(window_end)
-            .fetch_one(db)
-            .await
-            .unwrap_or(0.0)
-        } else {
-            0.0
-        }
-    } else {
-        sqlx::query_scalar::<_, f64>(
-            "SELECT COALESCE(SUM(cost_usd), 0) FROM token_usage_logs \
-             WHERE subscription_id = $1 AND model = $2",
-        )
-        .bind(sub.id)
-        .bind(model)
-        .fetch_one(db)
-        .await
-        .unwrap_or(0.0)
+/// Rebuild per-model cost for a windowed subscription from DB, cache the result, and return it.
+async fn rebuild_model_cost(
+    state: &AppState,
+    sub: &KeySubscription,
+    model: &str,
+    window_start: i64,
+) -> f64 {
+    let reset_hours = match sub.reset_hours {
+        Some(rh) => rh,
+        None => return 0.0,
+    };
+    let ws_dt = match Utc.timestamp_opt(window_start, 0).single() {
+        Some(dt) => dt,
+        None => return 0.0,
+    };
+    let we_dt = ws_dt + chrono::Duration::seconds((reset_hours as i64) * 3600);
+
+    let cost = sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(SUM(cost_usd), 0) FROM token_usage_logs \
+         WHERE subscription_id = $1 AND model = $2 AND created_at >= $3 AND created_at < $4",
+    )
+    .bind(sub.id)
+    .bind(model)
+    .bind(ws_dt)
+    .bind(we_dt)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0.0);
+
+    let key = format!("sub_cost:{}:ws:{window_start}:m:{model}", sub.id);
+    if let Ok(mut conn) = state.redis.get().await {
+        let _: Result<(), _> = conn.set(&key, cost).await;
     }
+    cost
 }
 
-fn compute_window_idx(activated_at: chrono::DateTime<Utc>, reset_hours: i32) -> u64 {
-    let elapsed = (Utc::now() - activated_at).num_seconds().max(0) as u64;
-    elapsed / ((reset_hours as u64) * 3600)
+/// Rebuild per-model cost for a fixed (non-windowed) subscription from DB.
+async fn rebuild_model_cost_fixed(db: &PgPool, sub: &KeySubscription, model: &str) -> f64 {
+    sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(SUM(cost_usd), 0) FROM token_usage_logs \
+         WHERE subscription_id = $1 AND model = $2",
+    )
+    .bind(sub.id)
+    .bind(model)
+    .fetch_one(db)
+    .await
+    .unwrap_or(0.0)
 }
 
 /// Pre-request subscription check. Returns which subscription to charge (if any).
@@ -388,7 +454,6 @@ pub async fn update_cost_counters(
     sub_id: Uuid,
     model: &str,
     cost: f64,
-    activated_at: Option<chrono::DateTime<Utc>>,
     reset_hours: Option<i32>,
 ) {
     let Ok(mut conn) = state.redis.get().await else {
@@ -396,29 +461,36 @@ pub async fn update_cost_counters(
         return;
     };
 
-    if reset_hours.is_some() {
-        if let (Some(act), Some(rh)) = (activated_at, reset_hours) {
-            let window_idx = compute_window_idx(act, rh);
-            let ttl = (rh as i64) * 3600;
+    if let Some(rh) = reset_hours {
+        // Demand-driven windowing: ensure a window start exists
+        let ws = match ensure_window_start(state, sub_id, rh).await {
+            Some(ws) => ws,
+            None => {
+                tracing::warn!(
+                    "Could not ensure window start for sub_id={sub_id}, skipping cost counter update"
+                );
+                return;
+            }
+        };
+        let ttl = (rh as i64) * 3600;
 
-            // Window total
-            let wkey = format!("sub_cost:{sub_id}:w:{window_idx}");
-            let _: Result<f64, _> = deadpool_redis::redis::cmd("INCRBYFLOAT")
-                .arg(&wkey)
-                .arg(cost)
-                .query_async(&mut *conn)
-                .await;
-            let _: Result<(), _> = conn.expire(&wkey, ttl).await;
+        // Window total
+        let wkey = format!("sub_cost:{sub_id}:ws:{ws}");
+        let _: Result<f64, _> = deadpool_redis::redis::cmd("INCRBYFLOAT")
+            .arg(&wkey)
+            .arg(cost)
+            .query_async(&mut *conn)
+            .await;
+        let _: Result<(), _> = conn.expire(&wkey, ttl).await;
 
-            // Window per-model
-            let wmkey = format!("sub_cost:{sub_id}:w:{window_idx}:m:{model}");
-            let _: Result<f64, _> = deadpool_redis::redis::cmd("INCRBYFLOAT")
-                .arg(&wmkey)
-                .arg(cost)
-                .query_async(&mut *conn)
-                .await;
-            let _: Result<(), _> = conn.expire(&wmkey, ttl).await;
-        }
+        // Window per-model
+        let wmkey = format!("sub_cost:{sub_id}:ws:{ws}:m:{model}");
+        let _: Result<f64, _> = deadpool_redis::redis::cmd("INCRBYFLOAT")
+            .arg(&wmkey)
+            .arg(cost)
+            .query_async(&mut *conn)
+            .await;
+        let _: Result<(), _> = conn.expire(&wmkey, ttl).await;
     } else {
         // Fixed total
         let tkey = format!("sub_cost:{sub_id}");
