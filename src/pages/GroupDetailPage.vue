@@ -15,6 +15,7 @@
         <q-tab name="allowed-models" label="Allowed Models" />
         <q-tab name="ttft" label="TTFT" />
         <q-tab name="token-usage" label="Token Usage" />
+        <q-tab name="spam" label="Spam" />
       </q-tabs>
       <q-separator />
 
@@ -452,6 +453,56 @@
             </q-card-section>
           </q-card>
         </q-tab-panel>
+
+        <!-- Spam Tab -->
+        <q-tab-panel name="spam" class="q-pa-none">
+          <q-card flat bordered>
+            <q-card-section>
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle1">Spam Detection</div>
+                <q-space />
+                <q-btn flat dense icon="refresh" @click="loadSpam" />
+              </div>
+              <div v-if="spamLoading && !spamRows.length" class="flex flex-center q-pa-lg">
+                <q-spinner size="md" />
+              </div>
+              <q-banner v-else-if="spamError" class="bg-negative text-white q-mb-sm" rounded>
+                {{ spamError }}
+                <template #action>
+                  <q-btn flat label="Retry" @click="loadSpam" />
+                </template>
+              </q-banner>
+              <q-table
+                v-else
+                flat bordered dense
+                :rows="spamRows"
+                :columns="spamColumns"
+                :row-key="(row) => `${row.group_key_id}-${row.spam_type}`"
+                :pagination="spamPagination"
+                :loading="spamLoading"
+                @request="onSpamRequest"
+              >
+                <template #body-cell-spam_type="props">
+                  <q-td :props="props">
+                    <q-badge
+                      :color="props.row.spam_type === 'low_token' ? 'orange' : 'red'"
+                      :label="props.row.spam_type === 'low_token' ? 'Low Token' : 'Duplicate Request'"
+                    />
+                  </q-td>
+                </template>
+                <template #body-cell-api_key="props">
+                  <q-td :props="props">
+                    <code>{{ props.row.api_key }}</code>
+                    <q-btn flat dense size="xs" icon="content_copy" aria-label="Copy key" @click.stop="copyText(props.row.api_key)" />
+                  </q-td>
+                </template>
+                <template #no-data>
+                  <div class="full-width text-center q-pa-md text-grey">No spam detected for this group</div>
+                </template>
+              </q-table>
+            </q-card-section>
+          </q-card>
+        </q-tab-panel>
       </q-tab-panels>
 
       <q-dialog v-model="showAddServer" @hide="resetAddForm">
@@ -714,7 +765,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useQuasar, copyToClipboard } from 'quasar';
-import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type CircuitStatus, type TokenUsageStats, type GroupKey, type Model } from 'stores/groups';
+import { useGroupsStore, type GroupWithServers, type GroupServerDetail, type CircuitStatus, type TokenUsageStats, type GroupKey, type Model, type SpamResult } from 'stores/groups';
 import { useServersStore } from 'stores/servers';
 import { useModelsStore } from 'stores/models';
 import { api } from 'boot/axios';
@@ -734,7 +785,7 @@ const modelsStore = useModelsStore();
 const group = ref<GroupWithServers | null>(null);
 const servers = ref<GroupServerDetail[]>([]);
 const failoverCodesStr = ref('');
-const validTabs = ['properties', 'servers', 'keys', 'allowed-models', 'ttft', 'token-usage'];
+const validTabs = ['properties', 'servers', 'keys', 'allowed-models', 'ttft', 'token-usage', 'spam'];
 const initialTab = validTabs.includes(route.query.tab as string) ? (route.query.tab as string) : 'properties';
 const activeTab = ref(initialTab);
 
@@ -788,6 +839,12 @@ const tokenUsagePeriod = ref('24h');
 const tokenUsageServerFilter = ref<string | null>(null);
 const tokenUsageDynamicKeyFilter = ref(false);
 const tokenUsageKeyHashFilter = ref('');
+
+// Spam detection state
+const spamRows = ref<SpamResult[]>([]);
+const spamLoading = ref(false);
+const spamError = ref('');
+const spamPagination = ref({ page: 1, rowsPerPage: 20, rowsNumber: 0, sortBy: '', descending: false });
 
 // Sub-keys state
 const subKeys = ref<GroupKey[]>([]);
@@ -915,6 +972,21 @@ const tokenUsageColumns = [
   { name: 'cache_read', label: 'Cache R', field: 'total_cache_read_tokens', align: 'right' as const, format: formatCompact },
   { name: 'requests', label: 'Requests', field: 'request_count', align: 'right' as const, format: formatCompact },
   { name: 'cost', label: 'Cost ($)', field: 'cost_usd', align: 'right' as const, format: (v: number | null) => v != null ? `$${v.toFixed(4)}` : '\u2014' },
+];
+
+const spamColumns = [
+  { name: 'api_key', label: 'Key', field: 'api_key', align: 'left' as const },
+  { name: 'key_name', label: 'Key Name', field: 'key_name', align: 'left' as const },
+  { name: 'spam_type', label: 'Spam Type', field: 'spam_type', align: 'left' as const },
+  { name: 'request_count', label: 'Request Count', field: 'request_count', align: 'right' as const },
+  { name: 'peak_rpm', label: 'Peak RPM', field: 'peak_rpm', align: 'right' as const },
+  {
+    name: 'detected_at',
+    label: 'Detected At',
+    field: 'detected_at',
+    align: 'left' as const,
+    format: (v: string) => new Date(v).toLocaleString(),
+  },
 ];
 
 const filteredTokenUsageRows = computed(() => {
@@ -1072,6 +1144,30 @@ watch(tokenUsagePeriod, () => loadTokenUsage());
 watch(tokenUsageDynamicKeyFilter, () => loadTokenUsage());
 watch(tokenUsageKeyHashFilter, () => loadTokenUsage());
 
+async function loadSpam() {
+  if (!group.value) return;
+  spamLoading.value = true;
+  spamError.value = '';
+  try {
+    const result = await groupsStore.fetchSpamDetection(group.value.id, {
+      page: spamPagination.value.page,
+      limit: spamPagination.value.rowsPerPage,
+    });
+    spamRows.value = result.data;
+    spamPagination.value.rowsNumber = result.total;
+  } catch {
+    spamError.value = 'Failed to load spam detection data';
+  } finally {
+    spamLoading.value = false;
+  }
+}
+
+function onSpamRequest(props: { pagination: { page: number; rowsPerPage: number } }) {
+  spamPagination.value.page = props.pagination.page;
+  spamPagination.value.rowsPerPage = props.pagination.rowsPerPage;
+  loadSpam();
+}
+
 // Sub-key methods
 function maskKey(key: string) {
   if (key.length <= 16) return key;
@@ -1197,6 +1293,7 @@ watch(activeTab, (tab) => {
   if (tab === 'keys' && subKeys.value.length === 0) loadSubKeys();
   if (tab === 'allowed-models') loadAllowedModels();
   if (tab === 'token-usage') loadTokenUsage();
+  if (tab === 'spam') loadSpam();
 });
 
 function onCbFieldClear(field: 'cb_max_failures' | 'cb_window_seconds' | 'cb_cooldown_seconds') {

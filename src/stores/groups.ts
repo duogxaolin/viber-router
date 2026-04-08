@@ -104,6 +104,16 @@ export interface TokenUsageStats {
   servers: ServerTokenUsage[];
 }
 
+export interface SpamResult {
+  group_key_id: string;
+  api_key: string;
+  key_name: string;
+  spam_type: 'low_token' | 'duplicate_request';
+  request_count: number;
+  peak_rpm: number;
+  detected_at: string;
+}
+
 export interface GroupKey {
   id: string;
   group_id: string;
@@ -326,6 +336,16 @@ export const useGroupsStore = defineStore('groups', () => {
     await api.delete(`/api/admin/groups/${groupId}/keys/${keyId}/allowed-models/${modelId}`);
   }
 
+  async function fetchSpamDetection(groupId: string, params?: { page?: number; limit?: number }) {
+    const { data } = await api.get<{
+      data: SpamResult[];
+      total: number;
+      page: number;
+      total_pages: number;
+    }>('/api/admin/spam-detection', { params: { group_id: groupId, ...params } });
+    return data;
+  }
+
   return {
     groups, total, totalPages, loading,
     fetchGroups, getGroup, createGroup, updateGroup, deleteGroup, regenerateKey,
@@ -335,5 +355,6 @@ export const useGroupsStore = defineStore('groups', () => {
     fetchGroupKeys, createGroupKey, updateGroupKey, regenerateGroupKey, bulkCreateGroupKeys, fetchKeyUsage,
     fetchGroupAllowedModels, addGroupAllowedModel, removeGroupAllowedModel,
     fetchKeyAllowedModels, addKeyAllowedModel, removeKeyAllowedModel,
+    fetchSpamDetection,
   };
 });

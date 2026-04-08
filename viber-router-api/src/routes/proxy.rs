@@ -595,6 +595,9 @@ async fn proxy_handler(
     let mut any_server_attempted = false;
     let mut any_rate_limited = false;
 
+    // Compute content_hash from raw request body bytes (used for duplicate-request spam detection)
+    let content_hash = Some(crate::usage_buffer::hash_key(&String::from_utf8_lossy(&body_bytes)));
+
     // Generate a unique request_id for uptime tracking across all server attempts
     let request_id = uuid::Uuid::new_v4();
 
@@ -1318,6 +1321,7 @@ async fn proxy_handler(
                             cost_usd,
                             subscription_id: selected_subscription_id,
                             created_at: Utc::now(),
+                            content_hash: content_hash.clone(),
                         };
                         if state.usage_tx.try_send(entry).is_err() {
                             tracing::warn!("Usage buffer full, dropping token usage entry");
@@ -1775,6 +1779,7 @@ where
                             cost_usd,
                             subscription_id,
                             created_at: Utc::now(),
+                            content_hash: None,
                         };
                         if state.usage_tx.try_send(entry).is_err() {
                             tracing::warn!("Usage buffer full, dropping token usage entry");

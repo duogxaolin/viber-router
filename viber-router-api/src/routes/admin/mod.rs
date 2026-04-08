@@ -12,6 +12,7 @@ pub mod group_key_allowed_models;
 pub mod subscription_plans;
 pub mod key_subscriptions;
 pub mod uptime;
+pub mod spam_detection;
 
 use axum::{
     Json, Router,
@@ -52,6 +53,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .nest("/ttft-stats", ttft::router())
         .nest("/token-usage", token_usage::router())
         .nest("/settings", settings::router())
+        .nest("/spam-detection", spam_detection::router())
         .layer(axum::middleware::from_fn_with_state(
             state,
             crate::middleware::admin_auth::admin_auth,
