@@ -148,7 +148,7 @@ async fn resolve_group_config(state: &AppState, api_key: &str) -> Option<GroupCo
         "SELECT gs.server_id, s.short_id, s.name as server_name, s.base_url, s.api_key, s.system_prompt, gs.priority, gs.model_mappings, gs.is_enabled, \
          gs.cb_max_failures, gs.cb_window_seconds, gs.cb_cooldown_seconds, \
          gs.rate_input, gs.rate_output, gs.rate_cache_write, gs.rate_cache_read, \
-         gs.max_requests, gs.rate_window_seconds, gs.normalize_cache_read, gs.max_input_tokens, gs.supported_models \
+         gs.max_requests, gs.rate_window_seconds, gs.normalize_cache_read, gs.max_input_tokens, gs.min_input_tokens, gs.supported_models \
          FROM group_servers gs JOIN servers s ON s.id = gs.server_id \
          WHERE gs.group_id = $1 AND gs.is_enabled = true ORDER BY gs.priority",
     )
@@ -880,6 +880,14 @@ async fn proxy_handler(
             && est > limit as usize
         {
             continue; // Skip server whose token threshold is exceeded
+        }
+
+        // Min input tokens: skip server if estimated tokens are below configured threshold
+        if let Some(limit) = server.min_input_tokens
+            && let Some(est) = estimated_tokens
+            && est < limit as usize
+        {
+            continue; // Skip server whose minimum token threshold is not met
         }
 
         // Supported models: skip server if it has a non-empty filter and the request model

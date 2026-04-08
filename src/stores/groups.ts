@@ -45,6 +45,7 @@ export interface GroupServerDetail {
   rate_window_seconds: number | null;
   normalize_cache_read: boolean;
   max_input_tokens: number | null;
+  min_input_tokens: number | null;
   supported_models: string[];
   password_hash: string | null;
 }
@@ -216,6 +217,7 @@ export const useGroupsStore = defineStore('groups', () => {
       rate_window_seconds?: number | null;
       normalize_cache_read?: boolean;
       max_input_tokens?: number | null;
+      min_input_tokens?: number | null;
       supported_models?: string[];
     },
   ) {

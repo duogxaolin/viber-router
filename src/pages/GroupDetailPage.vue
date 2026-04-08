@@ -118,6 +118,9 @@
                       <q-badge v-if="s.max_input_tokens != null" outline color="teal" class="q-ml-sm" :aria-label="`Max input tokens: ${s.max_input_tokens}`">
                         ≤{{ formatTokenThreshold(s.max_input_tokens) }} tokens
                       </q-badge>
+                      <q-badge v-if="s.min_input_tokens != null" outline color="orange" class="q-ml-sm" :aria-label="`Min input tokens: ${s.min_input_tokens}`">
+                        ≥{{ formatTokenThreshold(s.min_input_tokens) }} tokens
+                      </q-badge>
                     </q-item-label>
                     <q-item-label caption>
                       <template v-if="serversStore.isProtected(s.server_id) && !serversStore.isUnlocked(s.server_id)">
@@ -636,6 +639,21 @@
               class="q-mb-sm"
               @clear="editServerTokenForm.max_input_tokens = null"
             />
+            <div class="text-subtitle2 q-mt-md q-mb-xs">Min Input Tokens</div>
+            <div class="text-caption text-grey q-mb-sm">
+              Skip this server when the estimated input token count is below this limit (approximate). Leave empty to disable.
+            </div>
+            <q-input
+              v-model.number="editServerTokenForm.min_input_tokens"
+              label="Min Input Tokens"
+              type="number"
+              :min="1"
+              outlined
+              dense
+              clearable
+              class="q-mb-sm"
+              @clear="editServerTokenForm.min_input_tokens = null"
+            />
             <div class="text-subtitle2 q-mt-md q-mb-xs">Supported Models</div>
             <div class="text-caption text-grey q-mb-sm">
               Restrict this server to specific models. Leave empty to accept all models.
@@ -817,6 +835,7 @@ const editServerRlForm = ref({
 });
 const editServerTokenForm = ref({
   max_input_tokens: null as number | null,
+  min_input_tokens: null as number | null,
 });
 const editServerSupportedModels = ref<string[]>([]);
 const editServerModelOptions = ref<string[]>([]);
@@ -1534,6 +1553,7 @@ function doOpenEditServer(s: GroupServerDetail) {
   };
   editServerTokenForm.value = {
     max_input_tokens: s.max_input_tokens,
+    min_input_tokens: s.min_input_tokens,
   };
   editServerSupportedModels.value = s.supported_models ? [...s.supported_models] : [];
   // Load model names for the multi-select
@@ -1589,6 +1609,7 @@ async function onSaveEditServer() {
         max_requests: editServerRlForm.value.max_requests,
         rate_window_seconds: editServerRlForm.value.rate_window_seconds,
         max_input_tokens: editServerTokenForm.value.max_input_tokens,
+        min_input_tokens: editServerTokenForm.value.min_input_tokens,
         supported_models: editServerSupportedModels.value,
       });
     }

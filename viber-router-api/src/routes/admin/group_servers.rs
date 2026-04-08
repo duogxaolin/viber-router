@@ -111,14 +111,15 @@ async fn assign_server(
     let mappings = input.model_mappings.unwrap_or(serde_json::json!({}));
 
     let gs = sqlx::query_as::<_, GroupServer>(
-        "INSERT INTO group_servers (group_id, server_id, priority, model_mappings, is_enabled, cb_max_failures, cb_window_seconds, cb_cooldown_seconds, max_input_tokens, supported_models) \
-         VALUES ($1, $2, $3, $4, true, NULL, NULL, NULL, $5, $6) RETURNING *",
+        "INSERT INTO group_servers (group_id, server_id, priority, model_mappings, is_enabled, cb_max_failures, cb_window_seconds, cb_cooldown_seconds, max_input_tokens, min_input_tokens, supported_models) \
+         VALUES ($1, $2, $3, $4, true, NULL, NULL, NULL, $5, $6, $7) RETURNING *",
     )
     .bind(group_id)
     .bind(input.server_id)
     .bind(input.priority)
     .bind(&mappings)
     .bind(input.max_input_tokens)
+    .bind(input.min_input_tokens)
     .bind(&input.supported_models)
     .fetch_one(&state.db)
     .await
@@ -207,6 +208,12 @@ async fn update_assignment(
         None => (false, None),
     };
 
+    // Determine whether to update min_input_tokens
+    let (update_min_input_tokens, min_input_tokens_val) = match input.min_input_tokens {
+        Some(v) => (true, v),
+        None => (false, None),
+    };
+
     // Determine whether to update supported_models
     let (update_supported_models, supported_models_val) = match input.supported_models {
         Some(v) => (true, v),
@@ -229,7 +236,8 @@ async fn update_assignment(
          rate_window_seconds = CASE WHEN $22 THEN $23 ELSE rate_window_seconds END, \
          normalize_cache_read = COALESCE($24, normalize_cache_read), \
          max_input_tokens = CASE WHEN $25 THEN $26 ELSE max_input_tokens END, \
-         supported_models = CASE WHEN $27 THEN $28 ELSE supported_models END \
+         min_input_tokens = CASE WHEN $27 THEN $28 ELSE min_input_tokens END, \
+         supported_models = CASE WHEN $29 THEN $30 ELSE supported_models END \
          WHERE group_id = $4 AND server_id = $5 RETURNING *",
     )
     .bind(input.priority)
@@ -258,6 +266,8 @@ async fn update_assignment(
     .bind(input.normalize_cache_read)
     .bind(update_max_input_tokens)
     .bind(max_input_tokens_val)
+    .bind(update_min_input_tokens)
+    .bind(min_input_tokens_val)
     .bind(update_supported_models)
     .bind(&supported_models_val)
     .fetch_optional(&state.db)
