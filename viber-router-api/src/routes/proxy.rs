@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -156,6 +158,25 @@ async fn resolve_group_config(state: &AppState, api_key: &str) -> Option<GroupCo
     .fetch_all(&state.db)
     .await
     .ok()?;
+
+    // Filter servers for sub-key if per-key server assignments exist
+    let servers = if let Some(key_id) = group_key_id {
+        let assigned: Vec<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT server_id FROM group_key_servers WHERE group_key_id = $1",
+        )
+        .bind(key_id)
+        .fetch_all(&state.db)
+        .await
+        .ok()?;
+        if assigned.is_empty() {
+            servers // No assignments — use all group servers (backward compatible)
+        } else {
+            let assigned_ids: HashSet<uuid::Uuid> = assigned.into_iter().map(|(id,)| id).collect();
+            servers.into_iter().filter(|s| assigned_ids.contains(&s.server_id)).collect()
+        }
+    } else {
+        servers
+    };
 
     let failover_codes: Vec<u16> = serde_json::from_value(group.failover_status_codes.clone())
         .unwrap_or_else(|_| vec![429, 500, 502, 503]);

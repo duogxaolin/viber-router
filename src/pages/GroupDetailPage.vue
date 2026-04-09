@@ -303,6 +303,52 @@
                           </template>
                         </q-table>
                       </div>
+                      <div v-if="servers.length > 0" class="q-mb-md">
+                        <div class="row items-center q-mb-xs">
+                          <div class="text-subtitle2">Servers</div>
+                          <q-space />
+                          <q-btn-dropdown
+                            v-if="keyServerOptions(props.row.id).length > 0"
+                            flat dense icon="add" label="Add Server" color="primary"
+                            :loading="!!keyServersLoading[props.row.id]"
+                            :disable="!!keyServersLoading[props.row.id]"
+                          >
+                            <q-list dense style="min-width: 200px">
+                              <q-item
+                                v-for="gs in keyServerOptions(props.row.id)"
+                                :key="gs.server_id"
+                                clickable v-close-popup
+                                @click="onAddKeyServer(props.row.id, gs.server_id)"
+                              >
+                                <q-item-section>
+                                  <q-item-label>{{ gs.server_name }}</q-item-label>
+                                  <q-item-label caption>{{ gs.base_url }}</q-item-label>
+                                </q-item-section>
+                              </q-item>
+                            </q-list>
+                          </q-btn-dropdown>
+                        </div>
+                        <div v-if="getKeyServers(props.row.id).length === 0" class="text-caption text-grey q-mb-sm">
+                          Inherits all group servers
+                        </div>
+                        <q-list v-else dense bordered separator>
+                          <q-item v-for="ks in getKeyServers(props.row.id)" :key="ks.server_id">
+                            <q-item-section>
+                              <q-item-label>{{ ks.server_name }}</q-item-label>
+                              <q-item-label caption>{{ ks.base_url }}</q-item-label>
+                            </q-item-section>
+                            <q-item-section side>
+                              <q-btn
+                                flat dense icon="close" color="negative"
+                                :loading="!!keyServersLoading[props.row.id]"
+                                :disable="!!keyServersLoading[props.row.id]"
+                                aria-label="Remove server from key"
+                                @click="onRemoveKeyServer(props.row.id, ks.server_id)"
+                              />
+                            </q-item-section>
+                          </q-item>
+                        </q-list>
+                      </div>
                       <SubKeyUsage :group-id="group?.id ?? ''" :group-key-id="props.row.id" />
                       <div class="q-mt-sm">
                         <TtftChart :group-id="group?.id ?? ''" :group-key-id="props.row.id" />
@@ -962,6 +1008,10 @@ const allowedModelsLoading = ref(false);
 // Key allowed models state
 const keyAllowedModelsMap = ref<Record<string, Model[]>>({});
 const keyModelsLoading = ref<Record<string, boolean>>({});
+
+// Key server assignments state
+const keyServersMap = ref<Record<string, GroupServerDetail[]>>({});
+const keyServersLoading = ref<Record<string, boolean>>({});
 
 const ttftKeyOptions = computed(() => [
   { label: 'All keys', value: null },
@@ -1720,6 +1770,9 @@ function onExpandSubKey(props: { expand: boolean; row: GroupKey }) {
     if (allowedModels.value.length > 0) {
       loadKeyAllowedModels(props.row.id);
     }
+    if (servers.value.length > 0) {
+      loadKeyServers(props.row.id);
+    }
     loadKeySubscriptions(props.row.id);
     loadActivePlans();
   }
@@ -1823,6 +1876,59 @@ async function onRemoveKeyModel(keyId: string, modelId: string) {
     $q.notify({ type: 'negative', message: msg });
   } finally {
     keyModelsLoading.value[keyId] = false;
+  }
+}
+
+// Key server assignment helpers
+function getKeyServers(keyId: string): GroupServerDetail[] {
+  return keyServersMap.value[keyId] || [];
+}
+
+function keyServerOptions(keyId: string): GroupServerDetail[] {
+  const assigned = getKeyServers(keyId);
+  return servers.value.filter((gs) => !assigned.some((a) => a.server_id === gs.server_id));
+}
+
+async function loadKeyServers(keyId: string) {
+  if (!group.value) return;
+  try {
+    keyServersLoading.value[keyId] = true;
+    const data = await groupsStore.fetchKeyServers(group.value.id, keyId);
+    keyServersMap.value[keyId] = data;
+  } catch {
+    keyServersMap.value[keyId] = [];
+  } finally {
+    keyServersLoading.value[keyId] = false;
+  }
+}
+
+async function onAddKeyServer(keyId: string, serverId: string) {
+  if (!group.value) return;
+  keyServersLoading.value[keyId] = true;
+  try {
+    await groupsStore.assignKeyServer(group.value.id, keyId, serverId);
+    await loadKeyServers(keyId);
+    const serverName = servers.value.find((s) => s.server_id === serverId)?.server_name || serverId;
+    $q.notify({ type: 'positive', message: `"${serverName}" added to key` });
+  } catch (e: unknown) {
+    const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to add server to key';
+    $q.notify({ type: 'negative', message: msg });
+    keyServersLoading.value[keyId] = false;
+  }
+}
+
+async function onRemoveKeyServer(keyId: string, serverId: string) {
+  if (!group.value) return;
+  keyServersLoading.value[keyId] = true;
+  try {
+    const serverName = getKeyServers(keyId).find((s) => s.server_id === serverId)?.server_name || serverId;
+    await groupsStore.removeKeyServer(group.value.id, keyId, serverId);
+    await loadKeyServers(keyId);
+    $q.notify({ type: 'positive', message: `"${serverName}" removed from key` });
+  } catch (e: unknown) {
+    const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to remove server from key';
+    $q.notify({ type: 'negative', message: msg });
+    keyServersLoading.value[keyId] = false;
   }
 }
 

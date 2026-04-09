@@ -9,6 +9,7 @@ pub mod settings;
 pub mod models;
 pub mod group_allowed_models;
 pub mod group_key_allowed_models;
+pub mod group_key_servers;
 pub mod subscription_plans;
 pub mod key_subscriptions;
 pub mod uptime;

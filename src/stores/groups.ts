@@ -338,6 +338,21 @@ export const useGroupsStore = defineStore('groups', () => {
     await api.delete(`/api/admin/groups/${groupId}/keys/${keyId}/allowed-models/${modelId}`);
   }
 
+  // Key server assignments
+  async function fetchKeyServers(groupId: string, keyId: string) {
+    const { data } = await api.get<GroupServerDetail[]>(`/api/admin/groups/${groupId}/keys/${keyId}/servers`);
+    return data;
+  }
+
+  async function assignKeyServer(groupId: string, keyId: string, serverId: string) {
+    const { data } = await api.post<GroupServerDetail[]>(`/api/admin/groups/${groupId}/keys/${keyId}/servers`, { server_ids: [serverId] });
+    return data;
+  }
+
+  async function removeKeyServer(groupId: string, keyId: string, serverId: string) {
+    await api.delete(`/api/admin/groups/${groupId}/keys/${keyId}/servers/${serverId}`);
+  }
+
   async function fetchSpamDetection(groupId: string, params?: { page?: number; limit?: number }) {
     const { data } = await api.get<{
       data: SpamResult[];
@@ -357,6 +372,7 @@ export const useGroupsStore = defineStore('groups', () => {
     fetchGroupKeys, createGroupKey, updateGroupKey, regenerateGroupKey, bulkCreateGroupKeys, fetchKeyUsage,
     fetchGroupAllowedModels, addGroupAllowedModel, removeGroupAllowedModel,
     fetchKeyAllowedModels, addKeyAllowedModel, removeKeyAllowedModel,
+    fetchKeyServers, assignKeyServer, removeKeyServer,
     fetchSpamDetection,
   };
 });
