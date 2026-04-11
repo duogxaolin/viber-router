@@ -1,5 +1,5 @@
 ---
-name: osf-skill-explore-mode
+name: explore
 description: Shared explore/plan mode behavior for all planning commands (feat, fix, chore, refactor, perf, docs, test, ci, docker). Provides the stance, continuous verification, fluid workflow, subagent protocols, OpenSpec awareness, and guardrails.
 ---
 
@@ -413,6 +413,7 @@ The template above is in English for prompt readability. When outputting the act
 
 | Subagent | Specialty | When to Use |
 |----------|-----------|-------------|
+| osf-analyze | Structural codebase analysis — dependencies, blast radius, call chains, impact via GitNexus knowledge graph + codebase-retrieval | You need to trace exact dependencies, assess blast radius, understand call chains, or verify structural assumptions. Use your judgment — not every exploration needs deep structural analysis, but complex changes with cross-cutting impact do. |
 | osf-researcher | Web research — technical docs, best practices, comparisons, security advisories | Discussion references external tech you can't verify from codebase, user needs comparison data, or topic requires up-to-date information |
 | osf-proposal | Create spec (proposal, design, tasks) for implementation | User chooses to create spec first for large work |
 | osf-apply | Implement tasks from spec or conversation plan. Does NOT commit. | User chooses to start implementation |

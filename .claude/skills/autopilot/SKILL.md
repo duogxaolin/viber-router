@@ -29,7 +29,7 @@ Before you read any code, before you explore anything, before you do ANYTHING el
 1. Classify the work type from the user's request: feat, fix, chore, refactor, perf, docs, test, ci, docker
 2. Announce: "Autopilot: classifying as **[type]**"
 3. Use the Skill tool to invoke the classified domain command (e.g., skill: "feat" or skill: "chore")
-4. Use the Skill tool to invoke "osf-skill-explore-mode"
+4. Use the Skill tool to invoke "explore"
 
 You MUST make these two Skill tool calls before proceeding. If you find yourself reading code or exploring the codebase without having made these calls, STOP and make them now.
 
@@ -70,7 +70,13 @@ Same depth as interactive brainstorm. Use the loaded domain skill's guidance:
 - Trace execution flows relevant to the request
 - Surface hidden complexity, edge cases, error paths
 
-### 2. Make All Decisions
+### 2. Structural Analysis
+
+When the work touches multiple components, has cross-cutting impact, or you need to assess blast radius — delegate to osf-analyze via Agent tool with `subagent_type: "osf-analyze"`. Pass the specific structural question (e.g., "trace all callers of AuthService.validate and assess blast radius of changing its signature").
+
+Use your judgment — simple, isolated changes don't need this. Complex changes with unclear boundaries do.
+
+### 3. Make All Decisions
 
 For every ambiguity or decision point:
 - **First**: check existing codebase patterns and follow them
@@ -79,14 +85,14 @@ For every ambiguity or decision point:
 
 Never stop to ask the user. Decide and move on.
 
-### 3. Self-Validate
+### 4. Self-Validate
 
 Run through the domain skill's stress-test questions — self-resolve ALL of them.
 Run through the domain skill's zero-fog checklist + shared zero-fog checklist.
 
 If any check fails → explore deeper until it passes.
 
-### 4. Produce Plan Summary
+### 5. Produce Plan Summary
 
 Announce to user:
 ```
