@@ -17,4 +17,4 @@ docker-build:
     cd {{justfile_directory()}} && docker build -t nullmastermind/viber-router:latest -t nullmastermind/viber-router:$(git rev-parse --short HEAD) .
 
 docker-push: docker-build
-    cd {{justfile_directory()}} && docker push nullmastermind/viber-router:latest && docker push nullmastermind/viber-router:$(git rev-parse --short HEAD)
+    cd {{justfile_directory()}} && docker tag nullmastermind/viber-router:latest nullmastermind/viber-router:$(git rev-parse --short HEAD) && docker push nullmastermind/viber-router:latest && docker push nullmastermind/viber-router:$(git rev-parse --short HEAD)
