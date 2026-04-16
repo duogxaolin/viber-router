@@ -30,6 +30,14 @@ export default defineRouter((/* { store, ssrContext } */) => {
 	});
 
 	Router.beforeEach((to) => {
+		if (to.path.startsWith('/usage/')) {
+			const key = to.path.slice('/usage/'.length);
+			if (key) {
+				localStorage.setItem('usage-key', decodeURIComponent(key));
+				return '/usage';
+			}
+		}
+
 		const token = localStorage.getItem('admin_token');
 		if (to.path !== '/login' && !to.path.startsWith('/usage') && !token) {
 			return '/login';

@@ -68,7 +68,7 @@
             </div>
             <div class="row items-center no-wrap">
               <span class="text-caption text-weight-medium" style="min-width: 70px; flex-shrink: 0">API Key</span>
-              <code class="q-ml-sm ellipsis" style="font-size: 13px">{{ data.api_key }}</code>
+              <code class="q-ml-sm ellipsis" style="font-size: 13px">{{ maskedKey }}</code>
               <q-btn flat dense size="xs" icon="content_copy" aria-label="Copy API key" class="q-ml-xs" style="flex-shrink: 0" @click="copyText(data.api_key)" />
             </div>
           </q-card-section>
@@ -129,8 +129,8 @@
                   />
                 </div>
               </div>
-              <div class="row items-start no-wrap">
-                <code style="font-size: 12px; flex: 1; min-width: 0; word-break: break-all; white-space: pre-wrap">{{ claudeCodeCmd }}</code>
+              <div class="row items-start no-wrap" @mouseenter="setupHovered = true" @mouseleave="setupHovered = false">
+                <code style="font-size: 12px; flex: 1; min-width: 0; word-break: break-all; white-space: pre-wrap">{{ setupHovered ? claudeCodeCmd : maskedClaudeCodeCmd }}</code>
                 <q-btn flat dense size="xs" icon="content_copy" aria-label="Copy setup command" class="q-ml-xs" style="flex-shrink: 0" @click="copyText(claudeCodeCmd)" />
               </div>
             </q-tab-panel>
@@ -461,6 +461,7 @@ interface MeterDeltaRow {
 const route = useRoute();
 const router = useRouter();
 const keyInput = ref('');
+const storedKey = ref(localStorage.getItem('usage-key') ?? '');
 const loading = ref(false);
 const error = ref('');
 const data = ref<UsageData | null>(null);
@@ -531,9 +532,16 @@ function saveModelSelections() {
 
 watch([selectedOpus, selectedSonnet, selectedHaiku, selectedSubAgent], saveModelSelections);
 
-const routeKey = computed(() => route.params.key as string | undefined);
+const routeKey = computed(() => storedKey.value || undefined);
 
 const baseUrl = computed(() => window.location.origin);
+
+const maskedKey = computed(() => {
+  if (!data.value) return '';
+  const key = data.value.api_key;
+  if (key.length <= 12) return '****';
+  return `${key.slice(0, key.indexOf('-', 3) + 1)}****${key.slice(-4)}`;
+});
 
 const claudeCodeCmd = computed(() => {
   if (!data.value) return '';
@@ -543,6 +551,17 @@ const claudeCodeCmd = computed(() => {
   const subAgent = selectedSubAgent.value || sonnet;
   return `npx -y superclaude-cli@latest ${data.value.api_key} ${baseUrl.value} --opus-model ${opus} --sonnet-model ${sonnet} --haiku-model ${haiku} --sub-agent-model ${subAgent}`;
 });
+
+const maskedClaudeCodeCmd = computed(() => {
+  if (!data.value) return '';
+  const opus = selectedOpus.value || 'claude-opus-4-6';
+  const sonnet = selectedSonnet.value || 'claude-sonnet-4-6';
+  const haiku = selectedHaiku.value || 'claude-haiku-4-5-20251001';
+  const subAgent = selectedSubAgent.value || sonnet;
+  return `npx -y superclaude-cli@latest ${maskedKey.value} ${baseUrl.value} --opus-model ${opus} --sonnet-model ${sonnet} --haiku-model ${haiku} --sub-agent-model ${subAgent}`;
+});
+
+const setupHovered = ref(false);
 
 function copyText(text: string) {
   copyToClipboard(text).then(() =>
@@ -828,18 +847,23 @@ function refreshAll() {
 function submitKey() {
   const key = keyInput.value.trim();
   if (!key) return;
-  router.push(`/usage/${encodeURIComponent(key)}`);
+  storedKey.value = key;
+  localStorage.setItem('usage-key', key);
+  if (route.path !== '/usage') {
+    router.push('/usage');
+  }
+  fetchUsage(key);
 }
 
 function goToForm() {
   error.value = '';
   data.value = null;
-  router.push('/usage');
+  storedKey.value = '';
+  localStorage.removeItem('usage-key');
 }
 
-// Watch for route param changes
 watch(routeKey, (key) => {
-  if (key) fetchUsage(key);
+  keyInput.value = key ?? '';
 });
 
 // Re-fetch TTFT when period changes
@@ -866,6 +890,7 @@ function onVisibilityChange() {
 }
 
 onMounted(() => {
+  keyInput.value = routeKey.value ?? '';
   if (routeKey.value) fetchUsage(routeKey.value);
   pollTimer = setInterval(refreshAll, 60_000);
   countdownTimer = setInterval(() => { now.value = Date.now(); }, 60_000);
