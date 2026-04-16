@@ -91,9 +91,11 @@ Macro first (codebase-retrieval), then micro to clarify (GitNexus).
 
 4. **Impact Propagation** — This is the step that catches breaking dependents. For each symbol the caller is asking about:
 
-   a. Run `context` on the symbol → get ALL callers, importers, implementors, type consumers
-   b. For each dependent found in (a), run `context` again → trace THEIR dependents (depth 2). This catches transitive impact that single-level tracing misses.
-   c. Run `impact` on the symbol → get full blast radius with confidence scores. Cross-check against (a) and (b) — if impact reports fewer dependents than context found, investigate the gap.
+   `--repo xxx` is MANDATORY for `npx gitnexus context` and `npx gitnexus impact`. If you do not yet know the repo value, run `npx gitnexus list` first to identify the current repo, then use that value. Do NOT run either command without `--repo`.
+
+   a. Run `npx gitnexus context --repo xxx "<symbol>"` → get ALL callers, importers, implementors, type consumers
+   b. For each dependent found in (a), run `npx gitnexus context --repo xxx "<dependent>"` again → trace THEIR dependents (depth 2). This catches transitive impact that single-level tracing misses.
+   c. Run `npx gitnexus impact --repo xxx "<symbol>"` → get full blast radius with confidence scores. Cross-check against (a) and (b) — if impact reports fewer dependents than context found, investigate the gap.
    d. Completeness check: if `context` returns N dependents, all N MUST appear in your report. Do not silently drop any.
    e. Flag any dependent that uses the old signature/shape/contract — these are BREAKING dependents.
 
