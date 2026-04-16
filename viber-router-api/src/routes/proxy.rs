@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use chrono::Utc;
+use chrono::{Timelike, Utc};
 use futures_util::StreamExt;
 use serde_json::Value;
 
@@ -26,6 +26,64 @@ use crate::usage_buffer::{TokenUsageEntry, hash_key};
 
 pub fn router() -> Router<AppState> {
     Router::new().fallback(proxy_handler)
+}
+
+/// Returns true if the server is within its configured active hours window right now.
+/// Fail-open: returns true (treat as active) if any field is absent or the timezone is unparseable.
+fn is_server_active_now(server: &GroupServerDetail) -> bool {
+    let (Some(start_str), Some(end_str), Some(tz_str)) = (
+        &server.active_hours_start,
+        &server.active_hours_end,
+        &server.active_hours_timezone,
+    ) else {
+        return true; // Incomplete config — fail open
+    };
+
+    let tz: chrono_tz::Tz = match tz_str.parse() {
+        Ok(tz) => tz,
+        Err(_) => {
+            tracing::warn!(
+                "Server {} has unparseable active_hours_timezone {:?} — treating as 24/7",
+                server.server_name,
+                tz_str
+            );
+            return true; // Unparseable timezone — fail open
+        }
+    };
+
+    // Parse start and end as (hour, minute) tuples
+    let Some(start) = parse_hhmm(start_str) else {
+        return true; // Malformed — fail open
+    };
+    let Some(end) = parse_hhmm(end_str) else {
+        return true; // Malformed — fail open
+    };
+
+    // Get current time in the server's timezone
+    let now_local = Utc::now().with_timezone(&tz);
+    let now = (now_local.hour(), now_local.minute());
+
+    if start <= end {
+        // Same-day window: active when start <= now <= end
+        now >= start && now <= end
+    } else {
+        // Overnight window (start > end): active when now >= start OR now <= end
+        now >= start || now <= end
+    }
+}
+
+/// Parse "HH:MM" into (hour, minute). Returns None on malformed input.
+fn parse_hhmm(s: &str) -> Option<(u32, u32)> {
+    let bytes = s.as_bytes();
+    if bytes.len() != 5 || bytes[2] != b':' {
+        return None;
+    }
+    let h = s[0..2].parse::<u32>().ok()?;
+    let m = s[3..5].parse::<u32>().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some((h, m))
 }
 
 fn spawn_cb_alert(state: &AppState, config: &GroupConfig, server: &GroupServerDetail) {
@@ -151,7 +209,8 @@ async fn resolve_group_config(state: &AppState, api_key: &str) -> Option<GroupCo
         "SELECT gs.server_id, s.short_id, s.name as server_name, s.base_url, s.api_key, s.system_prompt, gs.priority, gs.model_mappings, gs.is_enabled, \
          gs.cb_max_failures, gs.cb_window_seconds, gs.cb_cooldown_seconds, \
          gs.rate_input, gs.rate_output, gs.rate_cache_write, gs.rate_cache_read, \
-         gs.max_requests, gs.rate_window_seconds, gs.normalize_cache_read, gs.max_input_tokens, gs.min_input_tokens, gs.supported_models \
+         gs.max_requests, gs.rate_window_seconds, gs.normalize_cache_read, gs.max_input_tokens, gs.min_input_tokens, gs.supported_models, \
+         gs.active_hours_start, gs.active_hours_end, gs.active_hours_timezone \
          FROM group_servers gs JOIN servers s ON s.id = gs.server_id \
          WHERE gs.group_id = $1 AND gs.is_enabled = true ORDER BY gs.priority",
     )
@@ -988,6 +1047,11 @@ async fn proxy_handler(
             if !in_list && !in_mappings {
                 continue; // Skip server that does not support this model
             }
+        }
+
+        // Active hours: skip server if current time is outside its configured active window
+        if !is_server_active_now(server) {
+            continue; // Skip server outside active hours
         }
 
         any_server_attempted = true;

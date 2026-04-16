@@ -122,6 +122,15 @@
                       <q-badge v-if="s.min_input_tokens != null" outline color="orange" class="q-ml-sm" :aria-label="`Min input tokens: ${s.min_input_tokens}`">
                         ≥{{ formatTokenThreshold(s.min_input_tokens) }} tokens
                       </q-badge>
+                      <q-badge
+                        v-if="s.active_hours_start != null && s.active_hours_end != null && s.active_hours_timezone != null"
+                        outline
+                        color="blue"
+                        class="q-ml-sm"
+                        :aria-label="`Active hours: ${s.active_hours_start}-${s.active_hours_end} (${s.active_hours_timezone})`"
+                      >
+                        {{ s.active_hours_start }}-{{ s.active_hours_end }} ({{ s.active_hours_timezone }})
+                      </q-badge>
                     </q-item-label>
                     <q-item-label caption>
                       <template v-if="serversStore.isProtected(s.server_id) && !serversStore.isUnlocked(s.server_id)">
@@ -763,10 +772,60 @@
               new-value-mode="add-unique"
               class="q-mb-sm"
             />
+            <div class="text-subtitle2 q-mt-md q-mb-xs">Active Hours</div>
+            <div class="text-caption text-grey q-mb-sm">
+              Leave empty for 24/7. Overnight windows supported (e.g., 22:00-06:00).
+            </div>
+            <q-select
+              v-model="editServerActiveHoursForm.timezone"
+              :options="filteredTimezoneOptions"
+              label="Timezone"
+              outlined
+              dense
+              clearable
+              use-input
+              input-debounce="0"
+              class="q-mb-sm"
+              :error="!activeHoursValid"
+              :error-message="activeHoursErrorMessage"
+              @filter="filterTimezones"
+            />
+            <div class="row q-gutter-sm q-mb-sm">
+              <q-input
+                v-model="editServerActiveHoursForm.start"
+                label="Start Time"
+                outlined
+                dense
+                mask="##:##"
+                placeholder="HH:MM"
+                style="flex: 1"
+                clearable
+                @clear="editServerActiveHoursForm.start = ''"
+              />
+              <q-input
+                v-model="editServerActiveHoursForm.end"
+                label="End Time"
+                outlined
+                dense
+                mask="##:##"
+                placeholder="HH:MM"
+                style="flex: 1"
+                clearable
+                @clear="editServerActiveHoursForm.end = ''"
+              />
+            </div>
+            <q-btn
+              flat
+              dense
+              label="Clear Active Hours"
+              size="sm"
+              class="q-mb-sm"
+              @click="onActiveHoursClear"
+            />
           </q-card-section>
           <q-card-actions align="right">
             <q-btn flat label="Cancel" v-close-popup />
-            <q-btn color="primary" label="Save" :loading="savingServer" @click="onSaveEditServer" />
+            <q-btn color="primary" label="Save" :loading="savingServer" :disable="!activeHoursValid" @click="onSaveEditServer" />
           </q-card-actions>
         </q-card>
       </q-dialog>
@@ -933,6 +992,65 @@ const editServerTokenForm = ref({
 const editServerSupportedModels = ref<string[]>([]);
 const editServerModelOptions = ref<string[]>([]);
 const savingServer = ref(false);
+
+const IANA_TIMEZONE_LIST = [
+  'UTC',
+  'US/Eastern',
+  'US/Central',
+  'US/Mountain',
+  'US/Pacific',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Asia/Tokyo',
+  'Asia/Shanghai',
+  'Asia/Ho_Chi_Minh',
+  'Asia/Bangkok',
+  'Asia/Singapore',
+  'Australia/Sydney',
+  'America/Sao_Paulo',
+];
+
+const editServerActiveHoursForm = ref({
+  timezone: '' as string | null,
+  start: '',
+  end: '',
+});
+const filteredTimezoneOptions = ref<string[]>(IANA_TIMEZONE_LIST);
+
+function filterTimezones(val: string, update: (fn: () => void) => void) {
+  update(() => {
+    if (!val) {
+      filteredTimezoneOptions.value = IANA_TIMEZONE_LIST;
+    } else {
+      const lower = val.toLowerCase();
+      filteredTimezoneOptions.value = IANA_TIMEZONE_LIST.filter((tz) =>
+        tz.toLowerCase().includes(lower),
+      );
+    }
+  });
+}
+
+function onActiveHoursClear() {
+  editServerActiveHoursForm.value.timezone = null;
+  editServerActiveHoursForm.value.start = '';
+  editServerActiveHoursForm.value.end = '';
+}
+
+const activeHoursValid = computed(() => {
+  const { timezone, start, end } = editServerActiveHoursForm.value;
+  const hasTimezone = !!timezone;
+  const hasStart = !!start;
+  const hasEnd = !!end;
+  const filledCount = [hasTimezone, hasStart, hasEnd].filter(Boolean).length;
+  // All three filled or all three empty is valid
+  return filledCount === 0 || filledCount === 3;
+});
+
+const activeHoursErrorMessage = computed(() => {
+  if (activeHoursValid.value) return '';
+  return 'All three active hours fields must be filled or all left empty.';
+});
 
 const keyBuilderEntries = ref<{ server_id: string; server_name: string; short_id: number; key: string; defaultKey: string }[]>([]);
 const showAllKeyBuilderServers = ref(false);
@@ -1726,6 +1844,12 @@ function doOpenEditServer(s: GroupServerDetail) {
     min_input_tokens: s.min_input_tokens,
   };
   editServerSupportedModels.value = s.supported_models ? [...s.supported_models] : [];
+  editServerActiveHoursForm.value = {
+    timezone: s.active_hours_timezone ?? null,
+    start: s.active_hours_start ?? '',
+    end: s.active_hours_end ?? '',
+  };
+  filteredTimezoneOptions.value = IANA_TIMEZONE_LIST;
   // Load model names for the multi-select
   modelsStore.fetchModels({ limit: 200 }).then((result) => {
     editServerModelOptions.value = result.data.map((m) => m.name);
@@ -1772,6 +1896,9 @@ async function onSaveEditServer() {
     });
     // Save circuit breaker fields via assignment update
     if (group.value) {
+      const ahTimezone = editServerActiveHoursForm.value.timezone || null;
+      const ahStart = editServerActiveHoursForm.value.start || null;
+      const ahEnd = editServerActiveHoursForm.value.end || null;
       await groupsStore.updateAssignment(group.value.id, editServerId.value, {
         cb_max_failures: editServerCbForm.value.cb_max_failures,
         cb_window_seconds: editServerCbForm.value.cb_window_seconds,
@@ -1781,6 +1908,9 @@ async function onSaveEditServer() {
         max_input_tokens: editServerTokenForm.value.max_input_tokens,
         min_input_tokens: editServerTokenForm.value.min_input_tokens,
         supported_models: editServerSupportedModels.value,
+        active_hours_start: ahStart,
+        active_hours_end: ahEnd,
+        active_hours_timezone: ahTimezone,
       });
     }
     showEditServer.value = false;

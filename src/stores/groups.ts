@@ -48,6 +48,9 @@ export interface GroupServerDetail {
   min_input_tokens: number | null;
   supported_models: string[];
   password_hash: string | null;
+  active_hours_start: string | null;
+  active_hours_end: string | null;
+  active_hours_timezone: string | null;
 }
 
 export interface GroupWithServers extends Group {
@@ -219,6 +222,9 @@ export const useGroupsStore = defineStore('groups', () => {
       max_input_tokens?: number | null;
       min_input_tokens?: number | null;
       supported_models?: string[];
+      active_hours_start?: string | null;
+      active_hours_end?: string | null;
+      active_hours_timezone?: string | null;
     },
   ) {
     await api.put(`/api/admin/groups/${groupId}/servers/${serverId}`, input);

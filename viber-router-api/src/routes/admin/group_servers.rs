@@ -96,6 +96,85 @@ fn validate_rate_limit_fields(
     Ok(())
 }
 
+/// Validate active hours fields: all-or-nothing, times must be HH:MM, timezone must be valid IANA.
+fn validate_active_hours_fields(
+    start: &Option<Option<String>>,
+    end: &Option<Option<String>>,
+    timezone: &Option<Option<String>>,
+) -> Result<(), ApiError> {
+    // Count how many of the three outer Options are Some (i.e., provided by caller)
+    let provided_count = [start, end, timezone].iter().filter(|f| f.is_some()).count();
+
+    if provided_count == 0 {
+        return Ok(()); // Not provided — leave unchanged
+    }
+
+    if provided_count != 3 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Active hours fields must all be provided or all omitted (active_hours_start, active_hours_end, active_hours_timezone)",
+        ));
+    }
+
+    // All three are provided. Check if they are all null (clearing) or all non-null (setting).
+    let inner_count = [start, end, timezone]
+        .iter()
+        .filter(|f| f.as_ref().and_then(|v| v.as_ref()).is_some())
+        .count();
+
+    if inner_count == 0 {
+        return Ok(()); // All null — clearing active hours, no further validation needed
+    }
+
+    if inner_count != 3 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Active hours fields must all be set or all null",
+        ));
+    }
+
+    // All three are non-null — validate format
+    let start_val = start.as_ref().unwrap().as_ref().unwrap();
+    let end_val = end.as_ref().unwrap().as_ref().unwrap();
+    let tz_val = timezone.as_ref().unwrap().as_ref().unwrap();
+
+    if !is_valid_hhmm(start_val) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "active_hours_start must be in HH:MM format (00:00-23:59)",
+        ));
+    }
+
+    if !is_valid_hhmm(end_val) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "active_hours_end must be in HH:MM format (00:00-23:59)",
+        ));
+    }
+
+    if tz_val.parse::<chrono_tz::Tz>().is_err() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "active_hours_timezone is not a recognized IANA timezone",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Returns true if the string matches HH:MM with HH 00-23 and MM 00-59.
+fn is_valid_hhmm(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 5 || bytes[2] != b':' {
+        return false;
+    }
+    let hh = &s[0..2];
+    let mm = &s[3..5];
+    let Ok(h) = hh.parse::<u8>() else { return false };
+    let Ok(m) = mm.parse::<u8>() else { return false };
+    h <= 23 && m <= 59
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(assign_server))
@@ -160,6 +239,13 @@ async fn update_assignment(
         }
     }
 
+    // Validate active hours fields
+    validate_active_hours_fields(
+        &input.active_hours_start,
+        &input.active_hours_end,
+        &input.active_hours_timezone,
+    )?;
+
     // Determine whether to update CB fields
     let (update_cb_max, cb_max_val) = match input.cb_max_failures {
         Some(v) => (true, v),
@@ -220,6 +306,20 @@ async fn update_assignment(
         None => (false, vec![]),
     };
 
+    // Determine whether to update active hours fields
+    let (update_active_hours_start, active_hours_start_val) = match input.active_hours_start {
+        Some(v) => (true, v),
+        None => (false, None),
+    };
+    let (update_active_hours_end, active_hours_end_val) = match input.active_hours_end {
+        Some(v) => (true, v),
+        None => (false, None),
+    };
+    let (update_active_hours_timezone, active_hours_timezone_val) = match input.active_hours_timezone {
+        Some(v) => (true, v),
+        None => (false, None),
+    };
+
     let gs = sqlx::query_as::<_, GroupServer>(
         "UPDATE group_servers SET \
          priority = COALESCE($1, priority), \
@@ -237,7 +337,10 @@ async fn update_assignment(
          normalize_cache_read = COALESCE($24, normalize_cache_read), \
          max_input_tokens = CASE WHEN $25 THEN $26 ELSE max_input_tokens END, \
          min_input_tokens = CASE WHEN $27 THEN $28 ELSE min_input_tokens END, \
-         supported_models = CASE WHEN $29 THEN $30 ELSE supported_models END \
+         supported_models = CASE WHEN $29 THEN $30 ELSE supported_models END, \
+         active_hours_start = CASE WHEN $31 THEN $32 ELSE active_hours_start END, \
+         active_hours_end = CASE WHEN $33 THEN $34 ELSE active_hours_end END, \
+         active_hours_timezone = CASE WHEN $35 THEN $36 ELSE active_hours_timezone END \
          WHERE group_id = $4 AND server_id = $5 RETURNING *",
     )
     .bind(input.priority)
@@ -270,6 +373,12 @@ async fn update_assignment(
     .bind(min_input_tokens_val)
     .bind(update_supported_models)
     .bind(&supported_models_val)
+    .bind(update_active_hours_start)
+    .bind(active_hours_start_val)
+    .bind(update_active_hours_end)
+    .bind(active_hours_end_val)
+    .bind(update_active_hours_timezone)
+    .bind(active_hours_timezone_val)
     .fetch_optional(&state.db)
     .await
     .map_err(internal)?

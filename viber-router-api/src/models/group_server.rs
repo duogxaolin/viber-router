@@ -23,6 +23,15 @@ pub struct GroupServer {
     pub min_input_tokens: Option<i32>,
     pub supported_models: Vec<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub active_hours_start: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub active_hours_end: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub active_hours_timezone: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -53,6 +62,15 @@ pub struct GroupServerDetail {
     pub min_input_tokens: Option<i32>,
     #[serde(default)]
     pub supported_models: Vec<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub active_hours_start: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub active_hours_end: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub active_hours_timezone: Option<String>,
 }
 
 /// Admin-facing server detail with rate fields (not used in proxy cache)
@@ -81,6 +99,15 @@ pub struct AdminGroupServerDetail {
     #[serde(default)]
     pub supported_models: Vec<String>,
     pub password_hash: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub active_hours_start: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub active_hours_end: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub active_hours_timezone: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,6 +139,9 @@ pub struct UpdateAssignment {
     pub max_input_tokens: Option<Option<i32>>,
     pub min_input_tokens: Option<Option<i32>>,
     pub supported_models: Option<Vec<String>>,
+    pub active_hours_start: Option<Option<String>>,
+    pub active_hours_end: Option<Option<String>>,
+    pub active_hours_timezone: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
