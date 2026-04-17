@@ -116,6 +116,18 @@
       <div v-if="hasActiveFilters" class="col-auto self-center">
         <q-btn flat dense no-caps color="grey" icon="clear_all" label="Clear all" @click="clearAllFilters" />
       </div>
+      <q-space />
+      <div class="col-auto self-center">
+        <q-btn
+          flat dense round
+          icon="refresh"
+          color="primary"
+          :loading="loading"
+          @click="() => fetchLogs(pagination.page, pagination.rowsPerPage)"
+        >
+          <q-tooltip>Reload logs</q-tooltip>
+        </q-btn>
+      </div>
     </div>
 
     <q-banner v-if="error" class="bg-negative text-white q-mb-md">
