@@ -18,6 +18,9 @@ fn default_settings() -> Settings {
         alert_status_codes: vec![500, 502, 503],
         alert_cooldown_mins: 5,
         blocked_paths: vec![],
+        ct_always_estimate: false,
+        ct_anthropic_base_url: None,
+        ct_anthropic_api_key: None,
     }
 }
 
@@ -25,7 +28,8 @@ async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<Json<Settings>, (StatusCode, Json<Value>)> {
     let row = sqlx::query_as::<_, Settings>(
-        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths \
+        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths, \
+         ct_always_estimate, ct_anthropic_base_url, ct_anthropic_api_key \
          FROM settings WHERE id = 1",
     )
     .fetch_optional(&state.db)
@@ -47,6 +51,9 @@ pub struct UpdateSettings {
     pub alert_status_codes: Option<Vec<i32>>,
     pub alert_cooldown_mins: Option<i32>,
     pub blocked_paths: Option<Vec<String>>,
+    pub ct_always_estimate: Option<bool>,
+    pub ct_anthropic_base_url: Option<Option<String>>,
+    pub ct_anthropic_api_key: Option<Option<String>>,
 }
 
 async fn put_settings(
@@ -55,7 +62,8 @@ async fn put_settings(
 ) -> Result<Json<Settings>, (StatusCode, Json<Value>)> {
     // Fetch current (or defaults) to merge with partial update
     let current = sqlx::query_as::<_, Settings>(
-        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths \
+        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths, \
+         ct_always_estimate, ct_anthropic_base_url, ct_anthropic_api_key \
          FROM settings WHERE id = 1",
     )
     .fetch_optional(&state.db)
@@ -77,23 +85,40 @@ async fn put_settings(
     let new_cooldown = input.alert_cooldown_mins.unwrap_or(current.alert_cooldown_mins);
     let blocked_paths_changed = input.blocked_paths.is_some();
     let new_blocked_paths = input.blocked_paths.unwrap_or(current.blocked_paths);
+    let new_ct_always_estimate = input.ct_always_estimate.unwrap_or(current.ct_always_estimate);
+    let new_ct_anthropic_base_url = match input.ct_anthropic_base_url {
+        Some(v) => v,
+        None => current.ct_anthropic_base_url,
+    };
+    let new_ct_anthropic_api_key = match input.ct_anthropic_api_key {
+        Some(v) => v,
+        None => current.ct_anthropic_api_key,
+    };
 
     let updated = sqlx::query_as::<_, Settings>(
-        "INSERT INTO settings (id, telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths) \
-         VALUES (1, $1, $2, $3, $4, $5) \
+        "INSERT INTO settings (id, telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths, \
+         ct_always_estimate, ct_anthropic_base_url, ct_anthropic_api_key) \
+         VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8) \
          ON CONFLICT (id) DO UPDATE SET \
            telegram_bot_token = EXCLUDED.telegram_bot_token, \
            telegram_chat_ids = EXCLUDED.telegram_chat_ids, \
            alert_status_codes = EXCLUDED.alert_status_codes, \
            alert_cooldown_mins = EXCLUDED.alert_cooldown_mins, \
-           blocked_paths = EXCLUDED.blocked_paths \
-         RETURNING telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths",
+           blocked_paths = EXCLUDED.blocked_paths, \
+           ct_always_estimate = EXCLUDED.ct_always_estimate, \
+           ct_anthropic_base_url = EXCLUDED.ct_anthropic_base_url, \
+           ct_anthropic_api_key = EXCLUDED.ct_anthropic_api_key \
+         RETURNING telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths, \
+         ct_always_estimate, ct_anthropic_base_url, ct_anthropic_api_key",
     )
     .bind(&new_token)
     .bind(&new_chat_ids)
     .bind(&new_status_codes)
     .bind(new_cooldown)
     .bind(&new_blocked_paths)
+    .bind(new_ct_always_estimate)
+    .bind(&new_ct_anthropic_base_url)
+    .bind(&new_ct_anthropic_api_key)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -114,7 +139,8 @@ async fn post_test_alert(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let settings = sqlx::query_as::<_, Settings>(
-        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths \
+        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths, \
+         ct_always_estimate, ct_anthropic_base_url, ct_anthropic_api_key \
          FROM settings WHERE id = 1",
     )
     .fetch_optional(&state.db)
@@ -185,7 +211,8 @@ async fn get_telegram_chats(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let settings = sqlx::query_as::<_, Settings>(
-        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths \
+        "SELECT telegram_bot_token, telegram_chat_ids, alert_status_codes, alert_cooldown_mins, blocked_paths, \
+         ct_always_estimate, ct_anthropic_base_url, ct_anthropic_api_key \
          FROM settings WHERE id = 1",
     )
     .fetch_optional(&state.db)

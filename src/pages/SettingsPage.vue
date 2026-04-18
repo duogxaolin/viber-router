@@ -110,6 +110,44 @@
 
     <q-card flat bordered style="max-width: 640px" class="q-mt-md">
       <q-card-section>
+        <div class="text-subtitle1 q-mb-md">Token Counting</div>
+
+        <q-toggle
+          v-model="form.ct_always_estimate"
+          label="Always estimate locally"
+          class="q-mb-sm"
+        />
+        <div class="text-caption text-grey-7 q-mb-md">
+          Skip API calls and estimate tokens by character count (chars / 4)
+        </div>
+
+        <template v-if="!form.ct_always_estimate">
+          <q-input
+            v-model="form.ct_anthropic_base_url"
+            label="Anthropic Base URL"
+            outlined
+            dense
+            clearable
+            placeholder="https://api.anthropic.com"
+            class="q-mb-sm"
+          />
+          <q-input
+            v-model="form.ct_anthropic_api_key"
+            label="Anthropic API Key"
+            outlined
+            dense
+            clearable
+            class="q-mb-md"
+          />
+        </template>
+
+        <div v-if="saveError" class="text-negative text-caption q-mb-sm">{{ saveError }}</div>
+        <q-btn color="primary" label="Save Settings" :loading="saving" @click="saveSettings" />
+      </q-card-section>
+    </q-card>
+
+    <q-card flat bordered style="max-width: 640px" class="q-mt-md">
+      <q-card-section>
         <div class="text-subtitle1 q-mb-md">Database Maintenance</div>
 
         <div class="row q-gutter-sm items-center q-mb-sm">
@@ -218,6 +256,9 @@ interface Settings {
   alert_status_codes: number[];
   alert_cooldown_mins: number;
   blocked_paths: string[];
+  ct_always_estimate: boolean;
+  ct_anthropic_base_url: string | null;
+  ct_anthropic_api_key: string | null;
 }
 
 interface TelegramChat {
@@ -234,6 +275,9 @@ const form = ref<Settings>({
   alert_status_codes: [500, 502, 503],
   alert_cooldown_mins: 5,
   blocked_paths: [],
+  ct_always_estimate: false,
+  ct_anthropic_base_url: null,
+  ct_anthropic_api_key: null,
 });
 
 const alertStatusCodesStr = computed({
@@ -293,6 +337,9 @@ async function saveSettings() {
       alert_status_codes: form.value.alert_status_codes,
       alert_cooldown_mins: form.value.alert_cooldown_mins,
       blocked_paths: form.value.blocked_paths,
+      ct_always_estimate: form.value.ct_always_estimate,
+      ct_anthropic_base_url: form.value.ct_anthropic_base_url || null,
+      ct_anthropic_api_key: form.value.ct_anthropic_api_key || null,
     });
     form.value = data;
     $q.notify({ type: 'positive', message: 'Settings saved' });

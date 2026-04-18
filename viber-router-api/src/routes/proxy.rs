@@ -838,6 +838,66 @@ async fn proxy_handler(
     let is_count_tokens = request_path == "/v1/messages/count_tokens";
     let mut ct_default_attempted = false;
 
+    // Global token counting settings override: check before per-group count_tokens flow
+    if is_count_tokens {
+        let ct_settings = sqlx::query_as::<_, (bool, Option<String>, Option<String>)>(
+            "SELECT ct_always_estimate, ct_anthropic_base_url, ct_anthropic_api_key \
+             FROM settings WHERE id = 1",
+        )
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((ct_always_estimate, ct_base_url, ct_api_key)) = ct_settings {
+            if ct_always_estimate {
+                // Estimate locally and return immediately — skip all downstream processing
+                let input_tokens = estimate_input_tokens(&body_bytes).unwrap_or(0);
+                let resp_body = serde_json::json!({"input_tokens": input_tokens});
+                return (StatusCode::OK, axum::Json(resp_body)).into_response();
+            } else if let (Some(base_url), Some(api_key)) = (ct_base_url, ct_api_key) {
+                // Forward to configured Anthropic-compatible endpoint
+                let upstream_url = format!(
+                    "{}/v1/messages/count_tokens",
+                    base_url.trim_end_matches('/')
+                );
+                let upstream_result = client
+                    .post(&upstream_url)
+                    .header("x-api-key", &api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json")
+                    .body(body_bytes.clone())
+                    .send()
+                    .await;
+
+                match upstream_result {
+                    Ok(resp) if resp.status().is_success() => {
+                        // Return the upstream response directly
+                        let ct_status = StatusCode::from_u16(resp.status().as_u16())
+                            .unwrap_or(StatusCode::OK);
+                        let ct_bytes = resp.bytes().await.unwrap_or_default();
+                        return (
+                            ct_status,
+                            [(
+                                header::CONTENT_TYPE,
+                                HeaderValue::from_static("application/json"),
+                            )],
+                            ct_bytes,
+                        )
+                            .into_response();
+                    }
+                    _ => {
+                        // Upstream failed — fall back to local estimate
+                        let input_tokens = estimate_input_tokens(&body_bytes).unwrap_or(0);
+                        let resp_body = serde_json::json!({"input_tokens": input_tokens});
+                        return (StatusCode::OK, axum::Json(resp_body)).into_response();
+                    }
+                }
+            }
+        }
+        // No global override — fall through to per-group count_tokens flow
+    }
+
     if is_count_tokens
         && let Some(ref ct_server) = config.count_tokens_server
     {

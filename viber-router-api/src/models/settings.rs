@@ -9,4 +9,8 @@ pub struct Settings {
     pub alert_cooldown_mins: i32,
     #[serde(default)]
     pub blocked_paths: Vec<String>,
+    #[serde(default)]
+    pub ct_always_estimate: bool,
+    pub ct_anthropic_base_url: Option<String>,
+    pub ct_anthropic_api_key: Option<String>,
 }
